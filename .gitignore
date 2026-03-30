@@ -9,6 +9,12 @@ api key.txt
 .cache/
 outputs/
 .tmp-elevenlabs-sdk/
+.nuitka/
+Nuitka/
+pip/
+build/
+dist/
+nuitka-crash-report.xml
 
 .venv/
 venv/

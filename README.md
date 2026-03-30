@@ -8,6 +8,11 @@ Eleven GUI is a desktop client for ElevenLabs built with Python 3.11+ and PySide
 
 The interface is designed for both keyboard-first and screen-reader users. The current UI direction favors a calmer layout, reduced visual density, and clear action grouping over engineering-panel complexity.
 
+## Downloads
+
+- [Latest Release](https://github.com/BarryAllen53/eleven-gui/releases/latest)
+- Windows release artifacts are published as packaged executables built with Nuitka
+
 ## Screenshots
 
 ### Overview
@@ -93,6 +98,20 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
+## Build a Windows Executable
+
+The project includes a release build script for Nuitka:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.0.0
+```
+
+Build outputs:
+
+- `build/` for intermediate compilation output
+- `dist/release/ElevenGUI-<version>-win64/ElevenGUI.exe`
+- `dist/release/ElevenGUI-<version>-win64.zip`
+
 ## Configuration
 
 The app reads the ElevenLabs API key from one of the following locations:
@@ -107,6 +126,8 @@ ELEVENLABS_API_KEY=your_key_here
 ```
 
 Secrets are intentionally excluded from version control through `.gitignore`.
+
+For release builds, place `.env` next to the executable if you want the packaged app to load the API key automatically.
 
 ## Project Structure
 
@@ -146,6 +167,15 @@ Generated audio files are written to `outputs/`. Temporary working files are wri
 
 - `.env` and `api key.txt` are ignored
 - `outputs/` and `.cache/` are ignored
+
+## Release Files
+
+- [CHANGELOG.md](CHANGELOG.md)
+- [Release Notes](docs/release-notes/v1.0.0.md)
+- [LICENSE](LICENSE)
+- [.env.example](.env.example)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)
 
 ## API References
 

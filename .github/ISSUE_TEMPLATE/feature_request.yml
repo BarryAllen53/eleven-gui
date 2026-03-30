@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest a meaningful improvement for workflow, accessibility, or packaging
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One sentence that describes the request.
+      placeholder: Add batch export for selected history items.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or workflow gap
+      description: Explain the concrete limitation this request solves.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior, UI, or shortcut you want.
+    validations:
+      required: true
+  - type: textarea
+    id: accessibility
+    attributes:
+      label: Accessibility impact
+      description: Explain keyboard, screen-reader, low-vision, or motor-access implications if relevant.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Overview
+        - Voice Hub
+        - Studio
+        - Clone Lab
+        - History
+        - Settings
+        - Accessibility
+        - Packaging
+        - Documentation
+        - Other
+    validations:
+      required: true

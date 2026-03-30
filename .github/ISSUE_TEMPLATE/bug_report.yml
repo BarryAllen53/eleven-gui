@@ -1,0 +1,80 @@
+name: Bug report
+description: Report a reproducible problem in the desktop client
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for crashes, broken workflows, accessibility regressions, or packaging problems.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One sentence that describes the problem.
+      placeholder: Studio generate finishes without updating the result card.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the exact actions required to reproduce the issue.
+      placeholder: |
+        1. Open Studio
+        2. Select a voice
+        3. Enter text
+        4. Press Generate
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Overview
+        - Voice Hub
+        - Studio
+        - Clone Lab
+        - History
+        - Settings
+        - Accessibility
+        - Packaging
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: assistive-tech
+    attributes:
+      label: Assistive technology
+      description: Select the closest match.
+      options:
+        - None
+        - NVDA
+        - JAWS
+        - Narrator
+        - Other screen reader
+        - Keyboard only
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include app version, Windows version, Python version if relevant, and whether you used the packaged executable.
+      placeholder: "App 1.0.0, Windows 11 24H2, packaged executable"
+    validations:
+      required: true

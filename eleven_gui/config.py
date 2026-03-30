@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,8 +9,6 @@ from dotenv import load_dotenv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-ENV_FILE = PROJECT_ROOT / ".env"
-LEGACY_KEY_FILE = PROJECT_ROOT / "api key.txt"
 
 
 @dataclass(slots=True)
@@ -22,13 +21,32 @@ class AppConfig:
     api_key_source: str
 
 
+def _is_packaged_runtime() -> bool:
+    return bool(getattr(sys, "frozen", False) or "__compiled__" in globals())
+
+
+def _runtime_root() -> Path:
+    if _is_packaged_runtime():
+        return Path(sys.argv[0]).resolve().parent
+    return PROJECT_ROOT
+
+
+def _assets_root() -> Path:
+    if _is_packaged_runtime():
+        return Path(__file__).resolve().parent / "assets"
+    return PROJECT_ROOT / "eleven_gui" / "assets"
+
+
 def load_config() -> AppConfig:
-    outputs_dir = PROJECT_ROOT / "outputs"
-    cache_dir = PROJECT_ROOT / ".cache"
+    runtime_root = _runtime_root()
+    env_file = runtime_root / ".env"
+    legacy_key_file = runtime_root / "api key.txt"
+    outputs_dir = runtime_root / "outputs"
+    cache_dir = runtime_root / ".cache"
     outputs_dir.mkdir(exist_ok=True)
     cache_dir.mkdir(exist_ok=True)
 
-    load_dotenv(ENV_FILE, override=False)
+    load_dotenv(env_file, override=False)
     api_key = ""
     source = "missing"
 
@@ -36,15 +54,15 @@ def load_config() -> AppConfig:
     if env_key:
         api_key = env_key
         source = ".env"
-    elif LEGACY_KEY_FILE.exists():
-        legacy_key = LEGACY_KEY_FILE.read_text(encoding="utf-8").strip()
+    elif legacy_key_file.exists():
+        legacy_key = legacy_key_file.read_text(encoding="utf-8").strip()
         if legacy_key:
             api_key = legacy_key
             source = "api key.txt"
 
     return AppConfig(
-        project_root=PROJECT_ROOT,
-        assets_dir=PROJECT_ROOT / "eleven_gui" / "assets",
+        project_root=runtime_root,
+        assets_dir=_assets_root(),
         outputs_dir=outputs_dir,
         cache_dir=cache_dir,
         api_key=api_key,
@@ -54,10 +72,11 @@ def load_config() -> AppConfig:
 
 def save_api_key(api_key: str) -> None:
     api_key = api_key.strip()
+    env_file = _runtime_root() / ".env"
     lines: list[str] = []
 
-    if ENV_FILE.exists():
-        lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
+    if env_file.exists():
+        lines = env_file.read_text(encoding="utf-8").splitlines()
 
     updated = False
     next_lines: list[str] = []
@@ -73,7 +92,7 @@ def save_api_key(api_key: str) -> None:
             next_lines.append("")
         next_lines.append(f"ELEVENLABS_API_KEY={api_key}")
 
-    ENV_FILE.write_text("\n".join(next_lines).strip() + "\n", encoding="utf-8")
+    env_file.write_text("\n".join(next_lines).strip() + "\n", encoding="utf-8")
 
 
 def mask_api_key(api_key: str) -> str:

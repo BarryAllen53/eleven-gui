@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: ElevenLabs API documentation
+    url: https://elevenlabs.io/docs/api-reference/introduction
+    about: Check the official API reference for endpoint behavior and requirements.
+  - name: Latest release downloads
+    url: https://github.com/BarryAllen53/eleven-gui/releases/latest
+    about: Download the newest packaged Windows build.
