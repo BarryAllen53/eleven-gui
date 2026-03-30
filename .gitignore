@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.env
+api key.txt
+
+.cache/
+outputs/
+.tmp-elevenlabs-sdk/
+
+.venv/
+venv/
+
+.idea/
+.vscode/

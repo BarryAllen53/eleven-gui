@@ -1,0 +1,4 @@
+PySide6>=6.8,<7
+httpx>=0.28,<1
+python-dotenv>=1.0,<2
+accessible-output2>=0.17; platform_system == "Windows"
