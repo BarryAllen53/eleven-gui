@@ -50,7 +50,7 @@ class SettingsPage(QWidget):
         self.spoken_fallback.setAccessibleName("Spoken fallback")
         self.spoken_fallback.toggled.connect(self.spoken_fallback_toggled.emit)
 
-        self.save_button = QPushButton("&Save to .env")
+        self.save_button = QPushButton("&Save API Key")
         self.save_button.setProperty("variant", "primary")
         self.save_button.setIcon(build_icon("save"))
         self.save_button.clicked.connect(lambda: self.save_requested.emit(self.key_input.text().strip()))

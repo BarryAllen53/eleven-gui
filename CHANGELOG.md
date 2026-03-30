@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.1 - 2026-03-31
+
+### Added
+
+- Inno Setup installer build pipeline
+- Optional code-signing helper script for release artifacts
+- Development certificate workflow for local Authenticode signing without signtool
+- Portable mode marker for packaged zip builds
+
+### Changed
+
+- Installed builds now store configuration and generated files in per-user Windows locations instead of the installation directory
+- Release documentation now covers installer and signing workflows
+
+### Fixed
+
+- Packaged runtime configuration now behaves correctly for installed deployments
+- Nuitka release builds now produce portable artifacts with an explicit mode marker
+
 ## 1.0.0 - 2026-03-31
 
 ### Added

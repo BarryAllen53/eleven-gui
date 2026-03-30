@@ -12,6 +12,8 @@ outputs/
 .nuitka/
 Nuitka/
 pip/
+.tools/
+.certs/
 build/
 dist/
 nuitka-crash-report.xml

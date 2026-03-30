@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.0.0"
+    [string]$Version = "1.0.1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,6 +74,7 @@ Copy-Item $exePath (Join-Path $portableDir "ElevenGUI.exe") -Force
 Copy-Item (Join-Path $root ".env.example") (Join-Path $portableDir ".env.example") -Force
 Copy-Item (Join-Path $root "README.md") (Join-Path $portableDir "README.md") -Force
 Copy-Item (Join-Path $root "LICENSE") (Join-Path $portableDir "LICENSE") -Force
+Set-Content -Path (Join-Path $portableDir ".portable") -Value "portable" -Encoding ascii
 
 $zipPath = Join-Path $artifactDir "ElevenGUI-$Version-win64.zip"
 if (Test-Path $zipPath) {

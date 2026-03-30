@@ -14,7 +14,13 @@ python main.py
 ## Build
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.0.0
+powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.0.1
+```
+
+## Installer Build
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 -Version 1.0.1
 ```
 
 ## Contribution Rules

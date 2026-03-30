@@ -11,7 +11,7 @@ The interface is designed for both keyboard-first and screen-reader users. The c
 ## Downloads
 
 - [Latest Release](https://github.com/BarryAllen53/eleven-gui/releases/latest)
-- Windows release artifacts are published as packaged executables built with Nuitka
+- Windows release artifacts are published as a portable zip, a standalone executable, and an Inno Setup installer
 
 ## Screenshots
 
@@ -103,7 +103,7 @@ python main.py
 The project includes a release build script for Nuitka:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.0.0
+powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.0.1
 ```
 
 Build outputs:
@@ -111,6 +111,18 @@ Build outputs:
 - `build/` for intermediate compilation output
 - `dist/release/ElevenGUI-<version>-win64/ElevenGUI.exe`
 - `dist/release/ElevenGUI-<version>-win64.zip`
+
+## Build the Installer
+
+The installer build script compiles the portable artifact first, installs Inno Setup locally if needed, and then produces a Windows setup executable:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 -Version 1.0.1
+```
+
+Installer output:
+
+- `dist/release/ElevenGUI-<version>-setup.exe`
 
 ## Configuration
 
@@ -127,7 +139,35 @@ ELEVENLABS_API_KEY=your_key_here
 
 Secrets are intentionally excluded from version control through `.gitignore`.
 
-For release builds, place `.env` next to the executable if you want the packaged app to load the API key automatically.
+Portable builds include a `.portable` marker and keep configuration, cache, and outputs next to the executable.
+
+Installed builds use per-user locations:
+
+- `%APPDATA%\ElevenGUI` for the saved API key
+- `%LOCALAPPDATA%\ElevenGUI` for cache and generated files
+
+## Code Signing Preparation
+
+The repository includes a signing helper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\sign-artifact.ps1 -Files .\dist\release\ElevenGUI-1.0.1-setup.exe
+```
+
+Signing is enabled automatically when these environment variables are available:
+
+- `CODESIGN_CERT_PATH`
+- `CODESIGN_CERT_PASSWORD`
+- optional `CODESIGN_TIMESTAMP_URL`
+
+For local or internal testing without a purchased certificate:
+
+```powershell
+$env:CODESIGN_USE_DEV_CERT = "1"
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 -Version 1.0.1
+```
+
+This creates a self-signed development certificate for the current user and signs the generated artifacts through PowerShell Authenticode. It is suitable for internal builds, not for public trusted distribution.
 
 ## Project Structure
 
@@ -171,7 +211,8 @@ Generated audio files are written to `outputs/`. Temporary working files are wri
 ## Release Files
 
 - [CHANGELOG.md](CHANGELOG.md)
-- [Release Notes](docs/release-notes/v1.0.0.md)
+- [Release Notes 1.0.1](docs/release-notes/v1.0.1.md)
+- [Release Notes 1.0.0](docs/release-notes/v1.0.0.md)
 - [LICENSE](LICENSE)
 - [.env.example](.env.example)
 - [CONTRIBUTING.md](CONTRIBUTING.md)

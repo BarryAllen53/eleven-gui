@@ -1474,9 +1474,9 @@ class MainWindow(QMainWindow):
         if not api_key:
             QMessageBox.warning(self, "Missing key", "Enter an API key before saving.")
             return
-        save_api_key(api_key)
+        source_label = save_api_key(api_key)
         self.config.api_key = api_key
-        self.config.api_key_source = ".env"
+        self.config.api_key_source = source_label
         if self.client:
             self.client.set_api_key(api_key)
         else:
@@ -1485,7 +1485,7 @@ class MainWindow(QMainWindow):
         self.settings_page.set_api_state(
             key_value=api_key,
             source=self.config.api_key_source,
-            status="Saved to .env.",
+            status=f"Saved to {source_label}.",
             spoken_fallback=self.settings_page.spoken_fallback.isChecked(),
         )
         self._apply_api_state("API key saved.")
