@@ -103,7 +103,7 @@ python main.py
 The project includes a release build script for Nuitka:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.0.1
+powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.0.2
 ```
 
 Build outputs:
@@ -117,7 +117,7 @@ Build outputs:
 The installer build script compiles the portable artifact first, installs Inno Setup locally if needed, and then produces a Windows setup executable:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 -Version 1.0.1
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 -Version 1.0.2
 ```
 
 Installer output:
@@ -151,7 +151,7 @@ Installed builds use per-user locations:
 The repository includes a signing helper:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\sign-artifact.ps1 -Files .\dist\release\ElevenGUI-1.0.1-setup.exe
+powershell -ExecutionPolicy Bypass -File .\scripts\sign-artifact.ps1 -Files .\dist\release\ElevenGUI-1.0.2-setup.exe
 ```
 
 Signing is enabled automatically when these environment variables are available:
@@ -164,7 +164,7 @@ For local or internal testing without a purchased certificate:
 
 ```powershell
 $env:CODESIGN_USE_DEV_CERT = "1"
-powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 -Version 1.0.1
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 -Version 1.0.2
 ```
 
 This creates a self-signed development certificate for the current user and signs the generated artifacts through PowerShell Authenticode. It is suitable for internal builds, not for public trusted distribution.
@@ -211,6 +211,7 @@ Generated audio files are written to `outputs/`. Temporary working files are wri
 ## Release Files
 
 - [CHANGELOG.md](CHANGELOG.md)
+- [Release Notes 1.0.2](docs/release-notes/v1.0.2.md)
 - [Release Notes 1.0.1](docs/release-notes/v1.0.1.md)
 - [Release Notes 1.0.0](docs/release-notes/v1.0.0.md)
 - [LICENSE](LICENSE)

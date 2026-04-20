@@ -64,13 +64,22 @@ def format_labels(labels: dict[str, str] | None) -> str:
 def content_type_to_suffix(content_type: str | None) -> str:
     if not content_type:
         return ".mp3"
-    if "mpeg" in content_type or "mp3" in content_type:
+    lower = content_type.lower()
+    if "opus" in lower:
+        return ".opus"
+    if "pcm" in lower:
+        return ".pcm"
+    if "ulaw" in lower:
+        return ".ulaw"
+    if "alaw" in lower:
+        return ".alaw"
+    if "mpeg" in lower or "mp3" in lower:
         return ".mp3"
-    if "wav" in content_type:
+    if "wav" in lower:
         return ".wav"
-    if "ogg" in content_type:
+    if "ogg" in lower:
         return ".ogg"
-    guessed = mimetypes.guess_extension(content_type.split(";")[0].strip())
+    guessed = mimetypes.guess_extension(lower.split(";")[0].strip())
     return guessed or ".bin"
 
 

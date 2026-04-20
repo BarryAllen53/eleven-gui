@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.2 - 2026-04-20
+
+### Added
+
+- Real-time TTS progress announcements every 20 seconds with estimated character and word completion
+- Expanded output format selector with WAV family variants, OPUS profiles, PCM family variants, and telephony formats
+
+### Changed
+
+- Studio language code input is now an editable select box with model-aware language options and `Auto`
+- Long-form TTS now chunks text in smaller units for more stable generation behavior
+
+### Fixed
+
+- Fixed long-form generation truncation where only the first chunk was audible in some players
+- Fixed progress display staying at zero before generation completed
+- Improved TTS language application and safer fallback handling when model-language combinations fail
+- Improved API error summarization to avoid noisy screen-reader repetition on long failures
+
 ## 1.0.1 - 2026-03-31
 
 ### Added

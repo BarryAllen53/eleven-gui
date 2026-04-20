@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import io
+import re
+import time
+import wave
 from pathlib import Path
 
 from PySide6.QtCore import QThreadPool, QTimer, QUrl, Qt
@@ -56,6 +60,10 @@ class MainWindow(QMainWindow):
         self._missing_voice_notice_timer = QTimer(self)
         self._missing_voice_notice_timer.setSingleShot(True)
         self._missing_voice_notice_timer.timeout.connect(self._flush_missing_voice_notice)
+        self._tts_progress_timer = QTimer(self)
+        self._tts_progress_timer.setInterval(20_000)
+        self._tts_progress_timer.timeout.connect(self._on_tts_progress_tick)
+        self._tts_progress: dict[str, object] | None = None
         self.state: dict[str, object] = {
             "subscription": {},
             "user": {},
@@ -87,6 +95,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # pragma: no cover - GUI close path
         self.player.stop()
+        self._tts_progress_timer.stop()
         if self.clone_worker:
             self.clone_worker.cancel()
         self.thread_pool.waitForDone(3000)
@@ -411,13 +420,25 @@ class MainWindow(QMainWindow):
             self._apply_api_state("Ready.")
 
     def _handle_task_error(self, label: str, message: str) -> None:
+        self._stop_tts_progress()
         self._apply_api_state(f"{label} failed.")
         self._announce_ui(f"{label} failed.", assertive=True)
-        summary = message.splitlines()[0]
+        summary = self._summarize_error(message)
         self.voice_page.show_voice_feedback(summary)
         self.clone_page.show_status(summary)
         self.studio_page.show_status(summary)
         QMessageBox.critical(self, "Request failed", summary)
+
+    def _summarize_error(self, message: str) -> str:
+        line = (message or "").splitlines()[0].strip()
+        if not line:
+            return "Request failed. Please try again."
+        compact = " ".join(line.split())
+        if len(compact) > 220:
+            compact = f"{compact[:217]}..."
+        if len(compact.split()) > 24:
+            return "Request failed. Check model, language code, and text length."
+        return compact
 
     def _apply_api_state(self, text: str) -> None:
         self.status_label.setText(text)
@@ -1228,6 +1249,263 @@ class MainWindow(QMainWindow):
 
         self._start_task("Starting PVC training...", task, on_success)
 
+    def _get_model_language_codes(self, model_id: str) -> list[str]:
+        for model in self.state.get("models", []):
+            if not isinstance(model, dict) or model.get("model_id") != model_id:
+                continue
+            raw = model.get("languages")
+            values: list[str] = []
+            if isinstance(raw, list):
+                for item in raw:
+                    if isinstance(item, str):
+                        values.append(item.strip().lower())
+                    elif isinstance(item, dict):
+                        code = item.get("language_id") or item.get("code") or item.get("id")
+                        if isinstance(code, str) and code.strip():
+                            values.append(code.strip().lower())
+            return [value for value in values if value]
+        return []
+
+    def _normalize_tts_payload(self, payload: dict) -> tuple[dict, bool]:
+        request = dict(payload)
+        text = str(request.get("text") or "")
+        text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+        request["text"] = text
+
+        language_code = str(request.get("language_code") or "").strip().lower()
+        if language_code in {"", "auto"}:
+            request["language_code"] = ""
+            return request, False
+        request["language_code"] = language_code
+        model_id = str(request.get("model_id") or "")
+        supported = self._get_model_language_codes(model_id)
+        return request, bool(supported and language_code not in supported)
+
+    def _split_tts_text(self, text: str, *, max_chars: int = 2000) -> list[str]:
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        normalized = normalized.strip()
+        if not normalized:
+            return []
+        if len(normalized) <= max_chars:
+            return [normalized]
+
+        chunks: list[str] = []
+        paragraphs = [part.strip() for part in re.split(r"\n{2,}", normalized) if part.strip()]
+        if not paragraphs:
+            paragraphs = [normalized]
+
+        def push_buffer(parts: list[str]) -> None:
+            if not parts:
+                return
+            chunk = "\n\n".join(parts).strip()
+            if chunk:
+                chunks.append(chunk)
+
+        buffer: list[str] = []
+        current_size = 0
+        for paragraph in paragraphs:
+            size = len(paragraph)
+            if size > max_chars:
+                sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", paragraph) if part.strip()]
+                if not sentences:
+                    sentences = [paragraph]
+                for sentence in sentences:
+                    if len(sentence) > max_chars:
+                        push_buffer(buffer)
+                        buffer = []
+                        current_size = 0
+                        start = 0
+                        while start < len(sentence):
+                            chunks.append(sentence[start : start + max_chars].strip())
+                            start += max_chars
+                        continue
+                    if current_size + len(sentence) + 1 > max_chars:
+                        push_buffer(buffer)
+                        buffer = [sentence]
+                        current_size = len(sentence)
+                    else:
+                        buffer.append(sentence)
+                        current_size += len(sentence) + 1
+                continue
+            if current_size + size + 2 > max_chars:
+                push_buffer(buffer)
+                buffer = [paragraph]
+                current_size = size
+            else:
+                buffer.append(paragraph)
+                current_size += size + 2
+        push_buffer(buffer)
+        return chunks or [normalized]
+
+    def _start_tts_progress(self, chunks: list[str]) -> None:
+        total_chars = sum(len(chunk) for chunk in chunks)
+        total_words = sum(len(chunk.split()) for chunk in chunks)
+        self._tts_progress = {
+            "started_at": time.monotonic(),
+            "total_chars": total_chars,
+            "total_words": total_words,
+            "done_chars": 0,
+            "done_words": 0,
+            "chunk_count": len(chunks),
+            "done_chunks": 0,
+            "current_chunk_chars": 0,
+            "current_chunk_started_at": 0.0,
+            "avg_chars_per_second": 0.0,
+        }
+        self._tts_progress_timer.start()
+        initial = (
+            f"Generation started. Total size is {total_chars} characters and {total_words} words."
+            if total_words
+            else f"Generation started. Total size is {total_chars} characters."
+        )
+        self.studio_page.show_status(initial)
+        self._apply_api_state(initial)
+        self._announce_ui(initial)
+
+    def _advance_tts_progress(self, chunk: str) -> None:
+        if not self._tts_progress:
+            return
+        started_at = float(self._tts_progress.get("current_chunk_started_at", 0.0) or 0.0)
+        elapsed = max(0.0, time.monotonic() - started_at) if started_at else 0.0
+        chunk_chars = len(chunk)
+        if elapsed > 0 and chunk_chars > 0:
+            measured = chunk_chars / elapsed
+            current_avg = float(self._tts_progress.get("avg_chars_per_second", 0.0) or 0.0)
+            if current_avg <= 0:
+                current_avg = measured
+            else:
+                current_avg = (current_avg * 0.6) + (measured * 0.4)
+            self._tts_progress["avg_chars_per_second"] = current_avg
+        self._tts_progress["done_chars"] = int(self._tts_progress.get("done_chars", 0)) + len(chunk)
+        self._tts_progress["done_words"] = int(self._tts_progress.get("done_words", 0)) + len(chunk.split())
+        self._tts_progress["done_chunks"] = int(self._tts_progress.get("done_chunks", 0)) + 1
+        self._tts_progress["current_chunk_chars"] = 0
+        self._tts_progress["current_chunk_started_at"] = 0.0
+
+    def _mark_tts_chunk_started(self, chunk: str) -> None:
+        if not self._tts_progress:
+            return
+        self._tts_progress["current_chunk_chars"] = len(chunk)
+        self._tts_progress["current_chunk_started_at"] = time.monotonic()
+
+    def _stop_tts_progress(self) -> None:
+        self._tts_progress_timer.stop()
+        self._tts_progress = None
+
+    def _on_tts_progress_tick(self) -> None:
+        state = self._tts_progress
+        if not state:
+            return
+        total_chars = int(state.get("total_chars", 0) or 0)
+        total_words = int(state.get("total_words", 0) or 0)
+        done_chars = int(state.get("done_chars", 0) or 0)
+        done_words = int(state.get("done_words", 0) or 0)
+        estimated_chars = done_chars
+        in_flight_chars = int(state.get("current_chunk_chars", 0) or 0)
+        in_flight_started_at = float(state.get("current_chunk_started_at", 0.0) or 0.0)
+        if in_flight_chars > 0 and in_flight_started_at > 0:
+            elapsed = max(0.0, time.monotonic() - in_flight_started_at)
+            avg_chars_per_second = float(state.get("avg_chars_per_second", 0.0) or 0.0)
+            if avg_chars_per_second <= 0:
+                avg_chars_per_second = 110.0
+            estimated_chars += min(in_flight_chars, int(elapsed * avg_chars_per_second))
+
+        estimated_words = done_words
+        if total_chars > 0 and total_words > 0 and estimated_chars > done_chars:
+            ratio = total_words / total_chars
+            estimated_words = min(total_words, int(estimated_chars * ratio))
+
+        remaining_chars = max(0, total_chars - estimated_chars)
+        remaining_words = max(0, total_words - estimated_words)
+        progress = (estimated_chars / total_chars) if total_chars else 0.0
+
+        if progress < 0.2:
+            prefix = "We are still at the beginning."
+        elif progress < 0.75:
+            prefix = "Generation is in progress."
+        elif progress < 0.95:
+            prefix = "Almost there."
+        else:
+            prefix = "Wrapping up."
+
+        message = (
+            f"{prefix} {estimated_chars} of {total_chars} characters and {estimated_words} of {total_words} words are done. "
+            f"{remaining_chars} characters and {remaining_words} words remain."
+        )
+        self.studio_page.show_status(message)
+        self._apply_api_state(message)
+        self._announce_ui(message)
+
+    def _merge_wav_payloads(self, payloads: list[AudioPayload]) -> AudioPayload:
+        if len(payloads) == 1:
+            return payloads[0]
+        total_characters = 0
+        for piece in payloads:
+            try:
+                total_characters += int(piece.character_count or 0)
+            except ValueError:
+                continue
+        params = None
+        frames: list[bytes] = []
+        for item in payloads:
+            with wave.open(io.BytesIO(item.audio), "rb") as wav_file:
+                current = (
+                    wav_file.getnchannels(),
+                    wav_file.getsampwidth(),
+                    wav_file.getframerate(),
+                    wav_file.getcomptype(),
+                    wav_file.getcompname(),
+                )
+                if params is None:
+                    params = current
+                elif current != params:
+                    combined = b"".join(piece.audio for piece in payloads)
+                    return AudioPayload(
+                        audio=combined,
+                        content_type=payloads[0].content_type,
+                        request_id=payloads[-1].request_id,
+                        character_count=str(total_characters) if total_characters else "",
+                        history_item_id=payloads[-1].history_item_id,
+                    )
+                frames.append(wav_file.readframes(wav_file.getnframes()))
+
+        out = io.BytesIO()
+        with wave.open(out, "wb") as wav_out:
+            wav_out.setnchannels(params[0])
+            wav_out.setsampwidth(params[1])
+            wav_out.setframerate(params[2])
+            wav_out.setcomptype(params[3], params[4])
+            for frame in frames:
+                wav_out.writeframes(frame)
+        return AudioPayload(
+            audio=out.getvalue(),
+            content_type=payloads[0].content_type,
+            request_id=payloads[-1].request_id,
+            character_count=str(total_characters) if total_characters else "",
+            history_item_id=payloads[-1].history_item_id,
+        )
+
+    def _merge_audio_payloads(self, payloads: list[AudioPayload]) -> AudioPayload:
+        if len(payloads) == 1:
+            return payloads[0]
+        content_type = payloads[0].content_type
+        if "wav" in content_type:
+            return self._merge_wav_payloads(payloads)
+        combined = b"".join(piece.audio for piece in payloads)
+        total_characters = 0
+        for piece in payloads:
+            try:
+                total_characters += int(piece.character_count or 0)
+            except ValueError:
+                continue
+        return AudioPayload(
+            audio=combined,
+            content_type=content_type,
+            request_id=payloads[-1].request_id,
+            character_count=str(total_characters) if total_characters else "",
+            history_item_id=payloads[-1].history_item_id,
+        )
+
     def generate_tts(self, payload: dict) -> None:
         client = self._require_client()
         if not client:
@@ -1235,16 +1513,78 @@ class MainWindow(QMainWindow):
         if not payload.get("voice_id") or not payload.get("model_id") or not payload.get("text"):
             QMessageBox.warning(self, "Missing TTS data", "Voice, model and text are required.")
             return
-        self.last_generation_request = {"kind": "tts", "payload": payload.copy()}
+        normalized_payload, language_ignored = self._normalize_tts_payload(payload)
+        if not normalized_payload.get("text"):
+            QMessageBox.warning(self, "Missing TTS data", "Voice, model and text are required.")
+            return
+        chunks = self._split_tts_text(str(normalized_payload.get("text", "")), max_chars=2000)
+        if not chunks:
+            QMessageBox.warning(self, "Missing TTS data", "Text is empty after normalization.")
+            return
+        self.last_generation_request = {"kind": "tts", "payload": normalized_payload.copy()}
         self.studio_page.clear_result()
         self.studio_page.show_status("Generating speech...")
+        self._start_tts_progress(chunks)
+        if language_ignored:
+            self._apply_api_state("Selected language is not supported by this model. Using Auto language.")
+            self._announce_ui("Language code was ignored for the selected model.")
 
         def task():
             try:
-                return {"audio": client.text_to_speech(**payload)}
+                if len(chunks) == 1:
+                    self._mark_tts_chunk_started(chunks[0])
+                    try:
+                        audio = client.text_to_speech(**normalized_payload)
+                    except ApiError as error:
+                        # If language is not supported by the selected model, retry once in auto mode.
+                        details = str(error.details).casefold()
+                        message = str(error).casefold()
+                        if normalized_payload.get("language_code") and (
+                            "language" in details or "language" in message
+                        ):
+                            retry = dict(normalized_payload)
+                            retry["language_code"] = ""
+                            audio = client.text_to_speech(**retry)
+                        else:
+                            raise
+                    self._advance_tts_progress(chunks[0])
+                    return {"audio": audio, "chunk_count": 1}
+                parts: list[AudioPayload] = []
+                requested_format = str(normalized_payload.get("output_format") or "")
+                chunk_output_format = requested_format
+                format_overridden = False
+                # Compressed stream concatenation is unreliable across players.
+                # For multi-chunk generation, synthesize as WAV and merge frames losslessly.
+                if not chunk_output_format.startswith("wav_"):
+                    chunk_output_format = "wav_44100"
+                    format_overridden = True
+                for chunk in chunks:
+                    request = dict(normalized_payload)
+                    request["text"] = chunk
+                    request["output_format"] = chunk_output_format
+                    self._mark_tts_chunk_started(chunk)
+                    try:
+                        parts.append(client.text_to_speech(**request))
+                    except ApiError as error:
+                        details = str(error.details).casefold()
+                        message = str(error).casefold()
+                        if request.get("language_code") and ("language" in details or "language" in message):
+                            retry = dict(request)
+                            retry["language_code"] = ""
+                            parts.append(client.text_to_speech(**retry))
+                        else:
+                            raise
+                    self._advance_tts_progress(chunk)
+                return {
+                    "audio": self._merge_audio_payloads(parts),
+                    "chunk_count": len(parts),
+                    "format_overridden": format_overridden,
+                    "requested_output_format": requested_format,
+                    "actual_output_format": chunk_output_format,
+                }
             except ApiError as error:
                 if self._is_missing_voice_error(error):
-                    return {"missing_voice_ids": [payload.get("voice_id", "")]}
+                    return {"missing_voice_ids": [normalized_payload.get("voice_id", "")]}
                 raise
 
         self._start_task("Generating speech...", task, lambda result: self._on_audio_generation_result("tts", result))
@@ -1273,12 +1613,29 @@ class MainWindow(QMainWindow):
         self._start_task("Converting audio...", task, lambda result: self._on_audio_generation_result("sts", result))
 
     def _on_audio_generation_result(self, prefix: str, payload: dict) -> None:
+        if prefix == "tts":
+            self._stop_tts_progress()
         if payload.get("missing_voice_ids"):
             self._queue_missing_voice_notice(self._prune_missing_voice_ids(payload.get("missing_voice_ids", [])))
             return
         audio = payload.get("audio")
         if isinstance(audio, AudioPayload):
             self._on_audio_generated(prefix, audio)
+            chunk_count = int(payload.get("chunk_count", 1) or 1)
+            if chunk_count > 1:
+                message = f"Long text processed in {chunk_count} chunks."
+                self.studio_page.show_status(message)
+                self._announce_ui(message)
+                if payload.get("format_overridden"):
+                    requested = str(payload.get("requested_output_format") or "unknown")
+                    actual = str(payload.get("actual_output_format") or "wav_44100")
+                    notice = (
+                        f"Chunked synthesis used {actual} for reliable merge. "
+                        f"Requested format {requested} was overridden."
+                    )
+                    self._apply_api_state(notice)
+                    self.studio_page.show_status(notice)
+                    self._announce_ui(notice)
 
     def _on_audio_generated(self, prefix: str, audio: AudioPayload) -> None:
         suffix = content_type_to_suffix(audio.content_type)

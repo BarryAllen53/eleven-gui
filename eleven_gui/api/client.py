@@ -26,8 +26,23 @@ class ApiError(RuntimeError):
             payload = response.text
         message = response.reason_phrase or "API request failed"
         if isinstance(payload, dict):
-            detail = payload.get("detail") or payload.get("message") or payload
-            message = str(detail)
+            detail = payload.get("detail")
+            if isinstance(detail, dict):
+                for key in ("message", "status", "code", "type"):
+                    value = detail.get(key)
+                    if isinstance(value, str) and value.strip():
+                        message = value.strip()
+                        break
+                else:
+                    message = "API request failed"
+            elif isinstance(detail, str) and detail.strip():
+                message = detail.strip()
+            elif isinstance(payload.get("message"), str) and payload.get("message", "").strip():
+                message = payload.get("message", "").strip()
+            elif isinstance(payload.get("error"), str) and payload.get("error", "").strip():
+                message = payload.get("error", "").strip()
+            else:
+                message = "API request failed"
         elif isinstance(payload, str) and payload.strip():
             message = payload.strip()
         return cls(message=message, status_code=response.status_code, details=payload)

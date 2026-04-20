@@ -23,10 +23,45 @@ from eleven_gui.ui.widgets import AudioResultCard, CollapsibleSection, SectionCa
 
 
 OUTPUT_FORMATS = [
+    "mp3_44100_192",
     "mp3_44100_128",
+    "mp3_44100_96",
+    "mp3_44100_64",
+    "mp3_44100_32",
     "mp3_22050_32",
+    "opus_48000_192",
+    "opus_48000_128",
+    "opus_48000_96",
+    "opus_48000_64",
+    "opus_48000_32",
+    "wav_48000",
+    "wav_44100",
+    "wav_32000",
+    "wav_24000",
+    "wav_22050",
+    "wav_16000",
+    "wav_8000",
+    "pcm_44100",
+    "pcm_24000",
+    "pcm_22050",
     "pcm_16000",
-    "wav",
+    "ulaw_8000",
+    "alaw_8000",
+]
+
+COMMON_LANGUAGE_CODES = [
+    "tr",
+    "en",
+    "ar",
+    "de",
+    "es",
+    "fr",
+    "it",
+    "ja",
+    "ko",
+    "pt",
+    "ru",
+    "zh",
 ]
 
 
@@ -42,6 +77,7 @@ class StudioPage(QWidget):
         super().__init__()
         self.sts_audio_path: Path | None = None
         self._voices_by_id: dict[str, dict] = {}
+        self._models_by_id: dict[str, dict] = {}
         self.setAccessibleName("Studio page")
         self.setAccessibleDescription("Generate speech with a selected voice or convert one recording into another voice.")
 
@@ -112,9 +148,15 @@ class StudioPage(QWidget):
         self.tts_model = QComboBox()
         self.tts_model.setAccessibleName("TTS model")
         self.tts_model.currentIndexChanged.connect(self._update_tts_button_state)
-        self.tts_language = QLineEdit()
-        self.tts_language.setPlaceholderText("Optional: tr, en, ar...")
+        self.tts_model.currentIndexChanged.connect(self._sync_language_options_for_model)
+        self.tts_language = QComboBox()
+        self.tts_language.setEditable(True)
+        self.tts_language.setInsertPolicy(QComboBox.NoInsert)
         self.tts_language.setAccessibleName("Language code")
+        self.tts_language.setAccessibleDescription(
+            "Optional language code. Use Auto to let the model decide."
+        )
+        self._populate_language_options([])
         self.tts_output = QComboBox()
         self.tts_output.addItems(OUTPUT_FORMATS)
         self.tts_output.setAccessibleName("TTS output format")
@@ -355,6 +397,7 @@ class StudioPage(QWidget):
         self._update_sts_button_state()
 
     def set_model_options(self, models: list[dict]) -> None:
+        self._models_by_id = {model.get("model_id", ""): model for model in models if model.get("model_id")}
         current_tts = self.tts_model.currentData()
         current_sts = self.sts_model.currentData()
         self.tts_model.clear()
@@ -368,6 +411,7 @@ class StudioPage(QWidget):
                 self.sts_model.addItem(name, model_id)
         self._restore_combo(self.tts_model, current_tts)
         self._restore_combo(self.sts_model, current_sts)
+        self._sync_language_options_for_model()
         self._update_tts_button_state()
         self._update_sts_button_state()
 
@@ -450,6 +494,12 @@ class StudioPage(QWidget):
         enabled = bool(self.tts_voice.currentData() and self.tts_model.currentData() and self.tts_text.toPlainText().strip())
         self.tts_button.setEnabled(enabled)
 
+    def selected_language_code(self) -> str:
+        text = self.tts_language.currentText().strip().lower()
+        if text in {"", "auto"}:
+            return ""
+        return text
+
     def _update_sts_button_state(self) -> None:
         enabled = bool(self.sts_voice.currentData() and self.sts_model.currentData() and self.sts_audio_path)
         self.sts_button.setEnabled(enabled)
@@ -460,13 +510,49 @@ class StudioPage(QWidget):
                 "voice_id": self.tts_voice.currentData(),
                 "model_id": self.tts_model.currentData(),
                 "text": self.tts_text.toPlainText().strip(),
-                "language_code": self.tts_language.text().strip(),
+                "language_code": self.selected_language_code(),
                 "output_format": self.tts_output.currentText(),
                 "seed": self.tts_seed.value() or None,
                 "enable_logging": self.tts_logging.isChecked(),
                 "voice_settings": self.tts_settings.settings(),
             }
         )
+
+    def _populate_language_options(self, codes: list[str]) -> None:
+        current = self.selected_language_code()
+        self.tts_language.blockSignals(True)
+        self.tts_language.clear()
+        self.tts_language.addItem("Auto", "")
+        seen = {""}
+        for code in codes + COMMON_LANGUAGE_CODES:
+            value = str(code).strip().lower()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            self.tts_language.addItem(value, value)
+        if current:
+            index = self.tts_language.findData(current)
+            if index >= 0:
+                self.tts_language.setCurrentIndex(index)
+            else:
+                self.tts_language.setEditText(current)
+        else:
+            self.tts_language.setCurrentIndex(0)
+        self.tts_language.blockSignals(False)
+
+    def _sync_language_options_for_model(self) -> None:
+        model = self._models_by_id.get(self.tts_model.currentData() or "", {})
+        raw_languages = model.get("languages")
+        model_codes: list[str] = []
+        if isinstance(raw_languages, list):
+            for item in raw_languages:
+                if isinstance(item, dict):
+                    code = item.get("language_id") or item.get("code") or item.get("id")
+                    if code:
+                        model_codes.append(str(code))
+                elif isinstance(item, str):
+                    model_codes.append(item)
+        self._populate_language_options(model_codes)
 
     def _emit_sts(self) -> None:
         self.sts_requested.emit(
