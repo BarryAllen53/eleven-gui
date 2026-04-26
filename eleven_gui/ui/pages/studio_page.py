@@ -76,6 +76,7 @@ class StudioPage(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.sts_audio_path: Path | None = None
+        self.tts_srt_path: Path | None = None
         self._voices_by_id: dict[str, dict] = {}
         self._models_by_id: dict[str, dict] = {}
         self.setAccessibleName("Studio page")
@@ -166,6 +167,21 @@ class StudioPage(QWidget):
         self.tts_seed.setAccessibleName("TTS seed")
         self.tts_logging = QCheckBox("Enable logging")
         self.tts_logging.setChecked(True)
+        self.tts_srt_file = QLineEdit()
+        self.tts_srt_file.setReadOnly(True)
+        self.tts_srt_file.setPlaceholderText("Optional: select an SRT subtitle file for timed narration")
+        self.tts_srt_file.setAccessibleName("Subtitle timing file")
+        self.tts_srt_browse = QPushButton("Browse &SRT")
+        self.tts_srt_browse.setIcon(build_icon("upload"))
+        self.tts_srt_browse.clicked.connect(self._pick_tts_srt_file)
+        self.tts_srt_clear = QPushButton("C&lear SRT")
+        self.tts_srt_clear.clicked.connect(self._clear_tts_srt_file)
+        srt_row = QHBoxLayout()
+        srt_row.setContentsMargins(0, 0, 0, 0)
+        srt_row.setSpacing(10)
+        srt_row.addWidget(self.tts_srt_file, 1)
+        srt_row.addWidget(self.tts_srt_browse)
+        srt_row.addWidget(self.tts_srt_clear)
         self.tts_text = QTextEdit()
         self.tts_text.setPlaceholderText("Paste or type the script that should be synthesized...")
         self.tts_text.setMinimumHeight(360)
@@ -193,6 +209,9 @@ class StudioPage(QWidget):
             label = QLabel(label_text)
             label.setBuddy(widget)
             config_form.addRow(label, widget)
+        subtitles_label = QLabel("Timed &subtitles")
+        subtitles_label.setBuddy(self.tts_srt_file)
+        config_form.addRow(subtitles_label, srt_row)
         left_layout.addLayout(config_form)
         left_layout.addWidget(self.tts_logging)
         self.tts_button = QPushButton("&Generate Speech")
@@ -224,11 +243,15 @@ class StudioPage(QWidget):
         text_label.setBuddy(self.tts_text)
         self.tts_text_meta = QLabel("No script yet.")
         self.tts_text_meta.setProperty("role", "muted")
+        self.tts_timing_meta = QLabel("No SRT timing file loaded.")
+        self.tts_timing_meta.setProperty("role", "muted")
+        self.tts_timing_meta.setWordWrap(True)
         compose_layout.addWidget(compose_title)
         compose_layout.addWidget(compose_subtitle)
         compose_layout.addWidget(text_label)
         compose_layout.addWidget(self.tts_text, 1)
         compose_layout.addWidget(self.tts_text_meta)
+        compose_layout.addWidget(self.tts_timing_meta)
 
         control_column.addWidget(left)
         control_column.addWidget(self.tts_advanced)
@@ -244,6 +267,9 @@ class StudioPage(QWidget):
             self.tts_output,
             self.tts_seed,
             self.tts_logging,
+            self.tts_srt_file,
+            self.tts_srt_browse,
+            self.tts_srt_clear,
             self.tts_button,
             self.tts_advanced.toggle_button,
             self.tts_text,
@@ -251,9 +277,13 @@ class StudioPage(QWidget):
             self.tts_settings.similarity.slider,
             self.tts_settings.style.slider,
             self.tts_settings.speed.slider,
+            self.tts_settings.loudness.slider,
+            self.tts_settings.speaker_loudness.slider,
             self.tts_settings.speaker_boost,
+            self.tts_settings.ek_ayarlar,
         )
         self._update_tts_text_meta()
+        self._update_tts_timing_meta()
         return tab
 
     def _build_sts_tab(self) -> QWidget:
@@ -374,7 +404,10 @@ class StudioPage(QWidget):
             self.sts_settings.similarity.slider,
             self.sts_settings.style.slider,
             self.sts_settings.speed.slider,
+            self.sts_settings.loudness.slider,
+            self.sts_settings.speaker_loudness.slider,
             self.sts_settings.speaker_boost,
+            self.sts_settings.ek_ayarlar,
         )
         self._update_sts_source_summary()
         return tab
@@ -459,6 +492,26 @@ class StudioPage(QWidget):
         self._update_sts_source_summary()
         self._update_sts_button_state()
 
+    def _pick_tts_srt_file(self) -> None:
+        file_name, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select subtitle timing file",
+            "",
+            "SubRip Files (*.srt)",
+        )
+        if not file_name:
+            return
+        self.tts_srt_path = Path(file_name)
+        self.tts_srt_file.setText(file_name)
+        self._update_tts_timing_meta()
+        self._update_tts_button_state()
+
+    def _clear_tts_srt_file(self) -> None:
+        self.tts_srt_path = None
+        self.tts_srt_file.clear()
+        self._update_tts_timing_meta()
+        self._update_tts_button_state()
+
     def _sync_voice_summary(self) -> None:
         voice = self._voices_by_id.get(self.tts_voice.currentData() or "")
         if not voice:
@@ -482,6 +535,16 @@ class StudioPage(QWidget):
         chars = len(text)
         self.tts_text_meta.setText(f"{words} words | {chars} characters")
 
+    def _update_tts_timing_meta(self) -> None:
+        if not self.tts_srt_path:
+            self.tts_timing_meta.setText("No SRT timing file loaded.")
+            self.tts_srt_clear.setEnabled(False)
+            return
+        self.tts_timing_meta.setText(
+            f"Timed subtitle mode is ready: {self.tts_srt_path.name}. Subtitle timings will control pauses and cue starts."
+        )
+        self.tts_srt_clear.setEnabled(True)
+
     def _update_sts_source_summary(self) -> None:
         if not self.sts_audio_path:
             self.sts_source_summary.setText("No source audio selected.")
@@ -491,7 +554,8 @@ class StudioPage(QWidget):
         )
 
     def _update_tts_button_state(self) -> None:
-        enabled = bool(self.tts_voice.currentData() and self.tts_model.currentData() and self.tts_text.toPlainText().strip())
+        has_source = bool(self.tts_text.toPlainText().strip() or self.tts_srt_path)
+        enabled = bool(self.tts_voice.currentData() and self.tts_model.currentData() and has_source)
         self.tts_button.setEnabled(enabled)
 
     def selected_language_code(self) -> str:
@@ -510,6 +574,7 @@ class StudioPage(QWidget):
                 "voice_id": self.tts_voice.currentData(),
                 "model_id": self.tts_model.currentData(),
                 "text": self.tts_text.toPlainText().strip(),
+                "srt_path": str(self.tts_srt_path) if self.tts_srt_path else "",
                 "language_code": self.selected_language_code(),
                 "output_format": self.tts_output.currentText(),
                 "seed": self.tts_seed.value() or None,
@@ -553,6 +618,13 @@ class StudioPage(QWidget):
                 elif isinstance(item, str):
                     model_codes.append(item)
         self._populate_language_options(model_codes)
+        eleven_v3_mu = str(self.tts_model.currentData() or "").strip().lower() == "eleven_v3"
+        self.tts_settings.speaker_boost.setEnabled(not eleven_v3_mu)
+        if eleven_v3_mu:
+            self.tts_settings.speaker_boost.setChecked(False)
+            self.tts_settings.speaker_boost.setToolTip("Speaker boost is not available for Eleven v3.")
+        else:
+            self.tts_settings.speaker_boost.setToolTip("")
 
     def _emit_sts(self) -> None:
         self.sts_requested.emit(

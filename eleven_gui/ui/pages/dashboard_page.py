@@ -46,11 +46,11 @@ class DashboardPage(QWidget):
         self.plan_card = MetricCard("Plan")
         self.credit_card = MetricCard("Characters")
         self.voice_card = MetricCard("Voice Slots")
-        self.clone_card = MetricCard("Cloning")
+        self.media_card = MetricCard("Media Tools")
         metrics_layout.addWidget(self.plan_card, 0, 0)
         metrics_layout.addWidget(self.credit_card, 0, 1)
         metrics_layout.addWidget(self.voice_card, 1, 0)
-        metrics_layout.addWidget(self.clone_card, 1, 1)
+        metrics_layout.addWidget(self.media_card, 1, 1)
 
         lower_row = QHBoxLayout()
         lower_row.setSpacing(14)
@@ -157,14 +157,9 @@ class DashboardPage(QWidget):
             f"{voice_used} / {voice_limit or 'N/A'}",
             f"Loaded voices: {len(voices)}",
         )
-        clone_caption = []
-        if subscription.get("can_use_instant_voice_cloning"):
-            clone_caption.append("IVC enabled")
-        if subscription.get("can_use_professional_voice_cloning"):
-            clone_caption.append("PVC enabled")
-        self.clone_card.set_content(
-            " / ".join(part.split()[0] for part in clone_caption) or "Limited",
-            ", ".join(clone_caption) or "No cloning capability detected",
+        self.media_card.set_content(
+            "Dubbing + Studio",
+            "Advanced media workflows may require additional plan access.",
         )
 
         self.credit_progress.setMaximum(current_for_progress)
@@ -200,8 +195,7 @@ class DashboardPage(QWidget):
             f"Character usage percentage: {format_percent(character_count, character_limit)}",
             f"Voice slots used: {voice_used} of {voice_limit or 'N/A'}",
             f"Loaded voices: {len(voices)}",
-            f"Instant voice cloning: {'enabled' if subscription.get('can_use_instant_voice_cloning') else 'disabled'}",
-            f"Professional voice cloning: {'enabled' if subscription.get('can_use_professional_voice_cloning') else 'disabled'}",
+            "Media workflows: dubbing and studio project support depends on plan and workspace permissions.",
             f"Next character reset: {format_unix(subscription.get('next_character_count_reset_unix'))}",
         ]
         self.snapshot_list.set_items(snapshot_items)

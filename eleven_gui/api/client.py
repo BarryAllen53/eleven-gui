@@ -185,7 +185,7 @@ class ElevenLabsClient:
         sample_paths: list[Path],
         description: str = "",
         labels: dict[str, str] | None = None,
-        remove_background_noise: bool = True,
+        remove_background_noise: bool = False,
     ) -> dict[str, Any]:
         data: dict[str, Any] = {
             "name": name,
@@ -249,7 +249,7 @@ class ElevenLabsClient:
         voice_id: str,
         *,
         sample_paths: list[Path],
-        remove_background_noise: bool = True,
+        remove_background_noise: bool = False,
     ) -> list[dict[str, Any]]:
         handles: list[Any] = []
         files: list[tuple[str, tuple[str, Any, str]]] = []
@@ -393,6 +393,176 @@ class ElevenLabsClient:
             json_body=payload,
         ).json()
 
+    def list_dubs(
+        self,
+        *,
+        cursor: str = "",
+        page_size: int = 100,
+        dubbing_status: str = "",
+        filter_by_creator: str = "all",
+        order_by: str = "created_at",
+        order_direction: str = "DESCENDING",
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "page_size": page_size,
+            "filter_by_creator": filter_by_creator,
+            "order_by": order_by,
+            "order_direction": order_direction,
+        }
+        if cursor:
+            params["cursor"] = cursor
+        if dubbing_status:
+            params["dubbing_status"] = dubbing_status
+        return self._request("GET", "/v1/dubbing", params=params).json()
+
+    def create_dubbing(
+        self,
+        *,
+        target_lang: str,
+        source_lang: str = "auto",
+        name: str = "",
+        source_url: str = "",
+        file_path: Path | None = None,
+        num_speakers: int = 0,
+        watermark: bool = False,
+        highest_resolution: bool = False,
+        drop_background_audio: bool = False,
+        use_profanity_filter: bool = False,
+    ) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "target_lang": target_lang,
+            "source_lang": source_lang or "auto",
+            "num_speakers": str(max(0, int(num_speakers))),
+            "watermark": str(bool(watermark)).lower(),
+            "highest_resolution": str(bool(highest_resolution)).lower(),
+            "drop_background_audio": str(bool(drop_background_audio)).lower(),
+            "use_profanity_filter": str(bool(use_profanity_filter)).lower(),
+        }
+        if name:
+            data["name"] = name
+        if source_url:
+            data["source_url"] = source_url
+
+        files: list[tuple[str, tuple[str, Any, str]]] | None = None
+        handle = None
+        try:
+            if file_path is not None:
+                mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+                handle = file_path.open("rb")
+                files = [("file", (file_path.name, handle, mime_type))]
+            return self._request("POST", "/v1/dubbing", data=data, files=files).json()
+        finally:
+            if handle is not None:
+                handle.close()
+
+    def get_dubbing(self, dubbing_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/v1/dubbing/{dubbing_id}").json()
+
+    def get_dubbed_audio(self, dubbing_id: str, language_code: str) -> BinaryPayload:
+        response = self._request("GET", f"/v1/dubbing/{dubbing_id}/audio/{language_code}", accept="*/*")
+        return BinaryPayload(
+            content=response.content,
+            content_type=response.headers.get("content-type", "audio/mpeg"),
+        )
+
+    def delete_dubbing(self, dubbing_id: str) -> dict[str, Any]:
+        return self._request("DELETE", f"/v1/dubbing/{dubbing_id}").json()
+
+    def list_studio_projects(self) -> dict[str, Any]:
+        return self._request("GET", "/v1/studio/projects").json()
+
+    def get_studio_project(self, project_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/v1/studio/projects/{project_id}").json()
+
+    def create_studio_project(
+        self,
+        *,
+        name: str,
+        default_model_id: str = "",
+        default_title_voice_id: str = "",
+        default_paragraph_voice_id: str = "",
+        from_url: str = "",
+        from_document_path: Path | None = None,
+        quality_preset: str = "",
+        auto_convert: bool = False,
+    ) -> dict[str, Any]:
+        data: dict[str, Any] = {"name": name, "auto_convert": str(bool(auto_convert)).lower()}
+        if default_model_id:
+            data["default_model_id"] = default_model_id
+        if default_title_voice_id:
+            data["default_title_voice_id"] = default_title_voice_id
+        if default_paragraph_voice_id:
+            data["default_paragraph_voice_id"] = default_paragraph_voice_id
+        if from_url:
+            data["from_url"] = from_url
+        if quality_preset:
+            data["quality_preset"] = quality_preset
+
+        files: list[tuple[str, tuple[str, Any, str]]] | None = None
+        handle = None
+        try:
+            if from_document_path is not None:
+                mime_type = mimetypes.guess_type(from_document_path.name)[0] or "application/octet-stream"
+                handle = from_document_path.open("rb")
+                files = [("from_document", (from_document_path.name, handle, mime_type))]
+            return self._request("POST", "/v1/studio/projects", data=data, files=files).json()
+        finally:
+            if handle is not None:
+                handle.close()
+
+    def delete_studio_project(self, project_id: str) -> dict[str, Any]:
+        return self._request("DELETE", f"/v1/studio/projects/{project_id}").json()
+
+    def convert_studio_project(self, project_id: str) -> dict[str, Any]:
+        return self._request("POST", f"/v1/studio/projects/{project_id}/convert").json()
+
+    def list_studio_project_snapshots(self, project_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/v1/studio/projects/{project_id}/snapshots").json()
+
+    def stream_studio_project_archive(
+        self,
+        project_id: str,
+        project_snapshot_id: str,
+    ) -> BinaryPayload:
+        response = self._request(
+            "POST",
+            f"/v1/studio/projects/{project_id}/snapshots/{project_snapshot_id}/archive",
+            json_body={},
+            accept="*/*",
+        )
+        return BinaryPayload(
+            content=response.content,
+            content_type=response.headers.get("content-type", "application/zip"),
+        )
+
+    def list_studio_chapters(self, project_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/v1/studio/projects/{project_id}/chapters").json()
+
+    def convert_studio_chapter(self, project_id: str, chapter_id: str) -> dict[str, Any]:
+        return self._request("POST", f"/v1/studio/projects/{project_id}/chapters/{chapter_id}/convert").json()
+
+    def list_studio_chapter_snapshots(self, project_id: str, chapter_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/v1/studio/projects/{project_id}/chapters/{chapter_id}/snapshots").json()
+
+    def stream_studio_chapter_audio(
+        self,
+        project_id: str,
+        chapter_id: str,
+        chapter_snapshot_id: str,
+        *,
+        convert_to_mpeg: bool = False,
+    ) -> BinaryPayload:
+        response = self._request(
+            "POST",
+            f"/v1/studio/projects/{project_id}/chapters/{chapter_id}/snapshots/{chapter_snapshot_id}/stream",
+            json_body={"convert_to_mpeg": bool(convert_to_mpeg)},
+            accept="*/*",
+        )
+        return BinaryPayload(
+            content=response.content,
+            content_type=response.headers.get("content-type", "audio/mpeg"),
+        )
+
     def text_to_speech(
         self,
         *,
@@ -404,6 +574,10 @@ class ElevenLabsClient:
         seed: int | None = None,
         enable_logging: bool = True,
         voice_settings: dict[str, Any] | None = None,
+        previous_text: str = "",
+        next_text: str = "",
+        previous_request_ids: list[str] | None = None,
+        next_request_ids: list[str] | None = None,
     ) -> AudioPayload:
         params = {
             "output_format": output_format,
@@ -416,6 +590,14 @@ class ElevenLabsClient:
             payload["seed"] = seed
         if voice_settings:
             payload["voice_settings"] = voice_settings
+        if previous_text:
+            payload["previous_text"] = previous_text
+        if next_text:
+            payload["next_text"] = next_text
+        if previous_request_ids:
+            payload["previous_request_ids"] = previous_request_ids[:3]
+        if next_request_ids:
+            payload["next_request_ids"] = next_request_ids[:3]
 
         response = self._request(
             "POST",

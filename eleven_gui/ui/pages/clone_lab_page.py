@@ -116,7 +116,7 @@ class CloneLabPage(QWidget):
         self.clone_labels.setPlaceholderText("locale:tr, style:cinematic")
         self.clone_labels.setAccessibleName("Clone labels")
         self.remove_bg = QCheckBox("Remove background noise")
-        self.remove_bg.setChecked(True)
+        self.remove_bg.setChecked(False)
         type_label = QLabel("&Clone type")
         type_label.setBuddy(self.clone_type)
         language_label = QLabel("&Language")
