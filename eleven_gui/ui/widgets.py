@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QProgressBar,
@@ -73,6 +74,16 @@ def build_icon(name: str, *, color: str | None = None, size: int = 24) -> QIcon:
     elif name == "studio":
         painter.drawPath(_sound_wave_path(s))
         painter.drawLine(4, s - 5, s - 4, s - 5)
+    elif name == "dubbing":
+        painter.drawRoundedRect(4, 6, s - 8, s - 12, 4, 4)
+        painter.drawLine(8, s // 2, s - 8, s // 2)
+        painter.drawLine(8, s // 2 - 4, 8, s // 2 + 4)
+        painter.drawLine(s - 8, s // 2 - 4, s - 8, s // 2 + 4)
+    elif name in {"projects", "audiobooks"}:
+        painter.drawRoundedRect(5, 4, s - 10, s - 8, 3, 3)
+        painter.drawLine(8, 9, s - 8, 9)
+        painter.drawLine(8, 13, s - 8, 13)
+        painter.drawLine(8, 17, s - 12, 17)
     elif name == "history":
         painter.drawEllipse(4, 4, s - 8, s - 8)
         painter.drawLine(s // 2, s // 2, s // 2, 8)
@@ -358,9 +369,14 @@ class VoiceSettingsEditor(QWidget):
         self.similarity = LabeledSlider("Similarity", minimum=0.0, maximum=1.0, initial=0.75)
         self.style = LabeledSlider("Style", minimum=0.0, maximum=1.0, initial=0.0)
         self.speed = LabeledSlider("Speed", minimum=0.7, maximum=1.2, initial=1.0)
+        self.loudness = LabeledSlider("Loudness", minimum=-1.0, maximum=1.0, initial=0.0)
+        self.speaker_loudness = LabeledSlider("Speaker loudness", minimum=-1.0, maximum=1.0, initial=0.0)
         self.speaker_boost = QCheckBox("Use speaker boost")
         self.speaker_boost.setChecked(True)
         self.speaker_boost.setAccessibleDescription("Preserves similarity to the original speaker when available.")
+        self.ek_ayarlar = QLineEdit()
+        self.ek_ayarlar.setPlaceholderText('Extra voice settings JSON, for example {"speaker_separation":0.25}')
+        self.ek_ayarlar.setAccessibleName("Extra voice settings JSON")
 
         layout.addWidget(heading)
         layout.addWidget(subtitle)
@@ -368,24 +384,38 @@ class VoiceSettingsEditor(QWidget):
         layout.addWidget(self.similarity)
         layout.addWidget(self.style)
         layout.addWidget(self.speed)
+        layout.addWidget(self.loudness)
+        layout.addWidget(self.speaker_loudness)
         layout.addWidget(self.speaker_boost)
+        layout.addWidget(self.ek_ayarlar)
 
-    def settings(self) -> dict[str, float | bool]:
-        return {
+    def settings(self) -> dict[str, float | bool | str]:
+        ayarlar: dict[str, float | bool | str] = {
             "stability": round(self.stability.value(), 2),
             "similarity_boost": round(self.similarity.value(), 2),
             "style": round(self.style.value(), 2),
             "speed": round(self.speed.value(), 2),
             "use_speaker_boost": self.speaker_boost.isChecked(),
         }
+        if abs(self.loudness.value()) > 0.0001:
+            ayarlar["loudness"] = round(self.loudness.value(), 2)
+        if abs(self.speaker_loudness.value()) > 0.0001:
+            ayarlar["speaker_loudness"] = round(self.speaker_loudness.value(), 2)
+        ek_ayarlar = self.ek_ayarlar.text().strip()
+        if ek_ayarlar:
+            ayarlar["extra_voice_settings_json"] = ek_ayarlar
+        return ayarlar
 
-    def set_settings(self, settings: dict[str, float | bool] | None) -> None:
+    def set_settings(self, settings: dict[str, float | bool | str] | None) -> None:
         settings = settings or {}
         self.stability.set_value(float(settings.get("stability", 0.5)))
         self.similarity.set_value(float(settings.get("similarity_boost", 0.75)))
         self.style.set_value(float(settings.get("style", 0.0)))
         self.speed.set_value(float(settings.get("speed", 1.0)))
+        self.loudness.set_value(float(settings.get("loudness", 0.0)))
+        self.speaker_loudness.set_value(float(settings.get("speaker_loudness", 0.0)))
         self.speaker_boost.setChecked(bool(settings.get("use_speaker_boost", True)))
+        self.ek_ayarlar.setText(str(settings.get("extra_voice_settings_json", "")))
 
 
 class DataTable(QTableWidget):

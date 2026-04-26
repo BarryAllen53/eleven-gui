@@ -100,7 +100,7 @@ class VoiceHubPage(QWidget):
         summary_row = QHBoxLayout()
         summary_row.setSpacing(14)
         self.my_summary_card = MetricCard("My Voices", "0", "Saved and ready to route")
-        self.cloned_summary_card = MetricCard("Cloned Voices", "0", "Instant and professional clones")
+        self.cloned_summary_card = MetricCard("Cloned Voices", "0", "Cloned voices currently in your workspace")
         self.library_summary_card = MetricCard("Library Results", "0", "Shared voices matching current query")
         summary_row.addWidget(self.my_summary_card)
         summary_row.addWidget(self.cloned_summary_card)
@@ -440,7 +440,7 @@ class VoiceHubPage(QWidget):
         self.my_voices = [voice for voice in voices if (voice.get("category") or "").lower() != "cloned"]
         self.cloned_voices = [voice for voice in voices if (voice.get("category") or "").lower() == "cloned"]
         self.my_summary_card.set_content(str(len(self.my_voices)), "Saved and ready to route")
-        self.cloned_summary_card.set_content(str(len(self.cloned_voices)), "Instant and professional clones")
+        self.cloned_summary_card.set_content(str(len(self.cloned_voices)), "Cloned voices currently in your workspace")
         self._populate_voice_filter_options("my", self.my_voices)
         self._populate_voice_filter_options("cloned", self.cloned_voices)
         self._apply_voice_filters("my")

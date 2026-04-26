@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import io
+import json
 import re
 import time
 import wave
@@ -24,13 +26,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from eleven_gui.accessibility import AccessibilityAnnouncer
+from eleven_gui.accessibility import AccessibilityAnnouncer, defer_tab_order_chain
 from eleven_gui.api.client import ApiError, AudioPayload, BinaryPayload, ElevenLabsClient
 from eleven_gui.config import AppConfig, save_api_key
 from eleven_gui.services.workers import Worker
-from eleven_gui.ui.pages.clone_lab_page import CloneLabPage
 from eleven_gui.ui.pages.dashboard_page import DashboardPage
+from eleven_gui.ui.pages.dubbing_page import DubbingPage
 from eleven_gui.ui.pages.history_page import HistoryPage
+from eleven_gui.ui.pages.projects_page import ProjectsPage
 from eleven_gui.ui.pages.settings_page import SettingsPage
 from eleven_gui.ui.pages.studio_page import StudioPage
 from eleven_gui.ui.pages.voice_hub_page import VoiceHubPage
@@ -71,6 +74,9 @@ class MainWindow(QMainWindow):
             "voices": [],
             "history": [],
             "shared": {},
+            "dubs": [],
+            "projects": [],
+            "project_details": {},
             "selected_voice": None,
         }
 
@@ -129,7 +135,8 @@ class MainWindow(QMainWindow):
         for key, label, icon in (
             ("dashboard", "Overview", "dashboard"),
             ("voices", "Voice Hub", "voices"),
-            ("clone", "Clone Lab", "clone"),
+            ("dubbing", "Dubbing", "dubbing"),
+            ("projects", "Audiobooks", "projects"),
             ("studio", "Studio", "studio"),
             ("history", "History", "history"),
             ("settings", "Settings", "settings"),
@@ -188,7 +195,8 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.dashboard_page = DashboardPage(self.config.assets_dir)
         self.voice_page = VoiceHubPage()
-        self.clone_page = CloneLabPage(self.config.assets_dir)
+        self.dubbing_page = DubbingPage()
+        self.projects_page = ProjectsPage()
         self.studio_page = StudioPage()
         self.history_page = HistoryPage()
         self.settings_page = SettingsPage()
@@ -196,16 +204,18 @@ class MainWindow(QMainWindow):
         self.page_meta = {
             "dashboard": ("Overview", "Workspace pulse and credit visibility"),
             "voices": ("Voice Hub", "Manage voices and route them into Studio"),
-            "clone": ("Clone Lab", "Create instant or professional voice clones"),
+            "dubbing": ("Dubbing", "Translate audio or video and download localized media"),
+            "projects": ("Audiobooks", "Create Studio projects from documents or URLs and export audio"),
             "studio": ("Studio", "Use a selected voice for TTS or STS"),
             "history": ("History", "Browse, replay, and download generations"),
             "settings": ("Settings", "API key, docs, and accessibility behavior"),
         }
-        self.page_order = ["dashboard", "voices", "clone", "studio", "history", "settings"]
+        self.page_order = ["dashboard", "voices", "dubbing", "projects", "studio", "history", "settings"]
         self.page_widgets = {
             "dashboard": self.dashboard_page,
             "voices": self.voice_page,
-            "clone": self.clone_page,
+            "dubbing": self.dubbing_page,
+            "projects": self.projects_page,
             "studio": self.studio_page,
             "history": self.history_page,
             "settings": self.settings_page,
@@ -213,7 +223,8 @@ class MainWindow(QMainWindow):
         for page in (
             self.dashboard_page,
             self.voice_page,
-            self.clone_page,
+            self.dubbing_page,
+            self.projects_page,
             self.studio_page,
             self.history_page,
             self.settings_page,
@@ -266,10 +277,6 @@ class MainWindow(QMainWindow):
         self._add_shortcut("Ctrl+Shift+S", self.trigger_context_save_or_stop)
         self._add_shortcut("Ctrl+Shift+D", self.trigger_context_download)
         self._add_shortcut("Ctrl+Shift+G", self.trigger_context_regenerate)
-        self._add_shortcut("Ctrl+Shift+A", self.trigger_context_add_samples)
-        self._add_shortcut("Ctrl+Shift+C", self.trigger_context_create_clone)
-        self._add_shortcut("Ctrl+Shift+Q", self.trigger_context_fetch_captcha)
-        self._add_shortcut("Ctrl+Shift+V", self.trigger_context_verify_owner)
         self._add_shortcut("Ctrl+Shift+T", self.trigger_context_train_or_test)
         self._add_shortcut("Ctrl+Shift+X", self.trigger_context_cancel_or_stop)
         self._add_shortcut("Ctrl+Enter", self.trigger_context_primary_action)
@@ -289,15 +296,15 @@ class MainWindow(QMainWindow):
         nav_chain = [
             self.nav_buttons["dashboard"],
             self.nav_buttons["voices"],
-            self.nav_buttons["clone"],
+            self.nav_buttons["dubbing"],
+            self.nav_buttons["projects"],
             self.nav_buttons["studio"],
             self.nav_buttons["history"],
             self.nav_buttons["settings"],
             self.back_button,
             self.refresh_button,
         ]
-        for first, second in zip(nav_chain, nav_chain[1:]):
-            QWidget.setTabOrder(first, second)
+        defer_tab_order_chain(self, *nav_chain)
 
     def _bind_page_signals(self) -> None:
         self.dashboard_page.refresh_requested.connect(self.refresh_all)
@@ -311,17 +318,17 @@ class MainWindow(QMainWindow):
         self.voice_page.delete_voice_requested.connect(self.delete_voice)
         self.voice_page.add_shared_requested.connect(self.add_shared_voice)
         self.voice_page.use_voice_requested.connect(self.use_voice_in_studio)
-
-        self.clone_page.create_clone_requested.connect(self.create_clone)
-        self.clone_page.preview_sample_requested.connect(self.play_local_sample_preview)
-        self.clone_page.stop_preview_requested.connect(self.player.stop)
-        self.clone_page.preview_clone_requested.connect(self.play_remote_preview)
-        self.clone_page.use_clone_requested.connect(self.use_voice_in_studio)
-        self.clone_page.delete_clone_requested.connect(self.delete_voice)
-        self.clone_page.fetch_pvc_captcha_requested.connect(self.fetch_pvc_captcha)
-        self.clone_page.verify_pvc_captcha_requested.connect(self.verify_pvc_captcha)
-        self.clone_page.train_pvc_requested.connect(self.train_pvc_voice)
-        self.clone_page.cancel_clone_requested.connect(self.cancel_clone_task)
+        self.dubbing_page.refresh_requested.connect(self.refresh_dubs)
+        self.dubbing_page.create_requested.connect(self.create_dub)
+        self.dubbing_page.load_requested.connect(self.load_dub_detail)
+        self.dubbing_page.download_requested.connect(self.download_dub)
+        self.dubbing_page.delete_requested.connect(self.delete_dub)
+        self.projects_page.refresh_requested.connect(self.refresh_projects)
+        self.projects_page.create_requested.connect(self.create_project)
+        self.projects_page.load_requested.connect(self.load_project_detail)
+        self.projects_page.convert_requested.connect(self.convert_project)
+        self.projects_page.download_requested.connect(self.download_project_archive)
+        self.projects_page.delete_requested.connect(self.delete_project)
 
         self.studio_page.tabs.tab_announced.connect(lambda label: self._announce_ui(f"Studio tab: {label}."))
         self.studio_page.tts_requested.connect(self.generate_tts)
@@ -425,7 +432,8 @@ class MainWindow(QMainWindow):
         self._announce_ui(f"{label} failed.", assertive=True)
         summary = self._summarize_error(message)
         self.voice_page.show_voice_feedback(summary)
-        self.clone_page.show_status(summary)
+        self.dubbing_page.show_status(summary)
+        self.projects_page.show_status(summary)
         self.studio_page.show_status(summary)
         QMessageBox.critical(self, "Request failed", summary)
 
@@ -482,7 +490,7 @@ class MainWindow(QMainWindow):
             if selected_id and not any(voice.get("voice_id", "") == selected_id for voice in voices):
                 self.state["selected_voice"] = None
         self.voice_page.set_voices(voices)
-        self.clone_page.set_cloned_voices(voices)
+        self.projects_page.set_voice_options(voices)
         self.studio_page.set_voice_options(voices)
 
     def _prune_missing_voice_ids(self, voice_ids: list[str]) -> int:
@@ -514,7 +522,8 @@ class MainWindow(QMainWindow):
             else f"Removed {removed_count} unavailable voices from the list."
         )
         self.voice_page.show_voice_feedback(message)
-        self.clone_page.show_status(message)
+        self.dubbing_page.show_status(message)
+        self.projects_page.show_status(message)
         self.studio_page.show_status(message)
         self._apply_api_state(message)
         self._announce_ui(message)
@@ -528,7 +537,7 @@ class MainWindow(QMainWindow):
     def show_shortcuts_help(self) -> None:
         sections = [
             "Global",
-            "Ctrl+1..6: Switch main pages",
+            "Ctrl+1..7: Switch main pages",
             "Alt+Left: Back",
             "F5: Refresh workspace",
             "F6 / Shift+F6: Move focus between major regions",
@@ -557,16 +566,18 @@ class MainWindow(QMainWindow):
             "Ctrl+Shift+X: Stop playback",
             "Ctrl+O: Browse source audio in STS",
             "",
-            "Clone Lab",
-            "Ctrl+Shift+A: Add samples",
-            "Ctrl+Shift+C: Create clone",
-            "Ctrl+Shift+P: Preview the first selected sample or clone",
-            "Ctrl+Shift+U: Use the first selected clone in Studio",
-            "Ctrl+Shift+Q: Fetch PVC captcha",
-            "Ctrl+Shift+V: Verify PVC owner",
-            "Ctrl+Shift+T: Start PVC training",
-            "Ctrl+Shift+X: Cancel clone task or stop preview",
-            "Delete: Delete all selected clones",
+            "Dubbing",
+            "Ctrl+Shift+R: Refresh dubbing jobs",
+            "Ctrl+Enter: Create dub",
+            "Ctrl+Shift+D: Download selected dubbed output",
+            "Delete: Delete selected dubbing jobs",
+            "",
+            "Audiobooks",
+            "Ctrl+Shift+R: Refresh project list",
+            "Ctrl+Enter: Create project",
+            "Ctrl+Shift+T: Convert selected project",
+            "Ctrl+Shift+D: Download selected project archive",
+            "Delete: Delete selected projects",
             "",
             "History",
             "Ctrl+Shift+R: Refresh history",
@@ -600,8 +611,11 @@ class MainWindow(QMainWindow):
             else:
                 self.studio_page.sts_file.setFocus(Qt.ShortcutFocusReason)
             return
-        if self.current_page_key == "clone":
-            self.clone_page.clone_name.setFocus(Qt.ShortcutFocusReason)
+        if self.current_page_key == "dubbing":
+            self.dubbing_page.name_input.setFocus(Qt.ShortcutFocusReason)
+            return
+        if self.current_page_key == "projects":
+            self.projects_page.project_name.setFocus(Qt.ShortcutFocusReason)
             return
         if self.current_page_key == "history":
             self.history_page.search.setFocus(Qt.ShortcutFocusReason)
@@ -634,6 +648,12 @@ class MainWindow(QMainWindow):
         if self.current_page_key == "history":
             self.history_page.refresh_button.click()
             return
+        if self.current_page_key == "dubbing":
+            self.dubbing_page.refresh_button.click()
+            return
+        if self.current_page_key == "projects":
+            self.projects_page.refresh_button.click()
+            return
         self.refresh_all()
 
     def trigger_context_preview_or_play(self) -> None:
@@ -650,12 +670,6 @@ class MainWindow(QMainWindow):
             if self.studio_page.result_card.isVisible():
                 self.studio_page.result_card.replay_button.click()
             return
-        if self.current_page_key == "clone":
-            if self.clone_page.clone_table.hasFocus():
-                self.clone_page.preview_clone_button.click()
-            else:
-                self.clone_page.preview_sample_button.click()
-            return
         if self.current_page_key == "history":
             self.history_page.play_button.click()
 
@@ -667,8 +681,6 @@ class MainWindow(QMainWindow):
             elif index == 0:
                 self.voice_page.my_use_voice_button.click()
             return
-        if self.current_page_key == "clone":
-            self.clone_page.use_clone_button.click()
 
     def trigger_context_save_or_stop(self) -> None:
         if self.current_page_key == "voices":
@@ -690,6 +702,12 @@ class MainWindow(QMainWindow):
         if self.current_page_key == "studio" and self.studio_page.result_card.isVisible():
             self.studio_page.result_card.download_button.click()
             return
+        if self.current_page_key == "dubbing":
+            self.dubbing_page.download_button.click()
+            return
+        if self.current_page_key == "projects":
+            self.projects_page.download_button.click()
+            return
         if self.current_page_key == "history":
             self.history_page.download_button.click()
 
@@ -698,35 +716,25 @@ class MainWindow(QMainWindow):
             self.studio_page.result_card.regenerate_button.click()
 
     def trigger_context_add_samples(self) -> None:
-        if self.current_page_key == "clone":
-            self.clone_page.pick_button.click()
+        return
 
     def trigger_context_create_clone(self) -> None:
-        if self.current_page_key == "clone":
-            self.clone_page.create_button.click()
+        return
 
     def trigger_context_fetch_captcha(self) -> None:
-        if self.current_page_key == "clone":
-            self.clone_page.fetch_captcha_button.click()
+        return
 
     def trigger_context_verify_owner(self) -> None:
-        if self.current_page_key == "clone":
-            self.clone_page.verify_captcha_button.click()
+        return
 
     def trigger_context_train_or_test(self) -> None:
-        if self.current_page_key == "clone":
-            self.clone_page.train_button.click()
+        if self.current_page_key == "projects":
+            self.projects_page.convert_button.click()
             return
         if self.current_page_key == "settings":
             self.settings_page.test_button.click()
 
     def trigger_context_cancel_or_stop(self) -> None:
-        if self.current_page_key == "clone":
-            if self.clone_worker:
-                self.clone_page.progress_card.cancel_button.click()
-            else:
-                self.clone_page.stop_sample_button.click()
-            return
         if self.current_page_key == "studio" and self.studio_page.result_card.isVisible():
             self.studio_page.result_card.stop_button.click()
 
@@ -740,15 +748,21 @@ class MainWindow(QMainWindow):
         if self.current_page_key == "voices":
             self.trigger_context_use_action()
             return
-        if self.current_page_key == "clone":
-            self.clone_page.create_button.click()
+        if self.current_page_key == "dubbing":
+            self.dubbing_page.create_button.click()
+            return
+        if self.current_page_key == "projects":
+            self.projects_page.create_button.click()
 
     def trigger_context_open_file(self) -> None:
         if self.current_page_key == "studio" and self.studio_page.tabs.currentIndex() == 1:
             self.studio_page.pick_button.click()
             return
-        if self.current_page_key == "clone":
-            self.clone_page.pick_button.click()
+        if self.current_page_key == "dubbing":
+            self.dubbing_page.pick_file_button.click()
+            return
+        if self.current_page_key == "projects":
+            self.projects_page.pick_document_button.click()
 
     def trigger_context_delete(self) -> None:
         if self.current_page_key == "voices":
@@ -758,8 +772,11 @@ class MainWindow(QMainWindow):
             elif index == 0:
                 self.voice_page.my_delete_button.click()
             return
-        if self.current_page_key == "clone":
-            self.clone_page.delete_clone_button.click()
+        if self.current_page_key == "dubbing":
+            self.dubbing_page.delete_button.click()
+            return
+        if self.current_page_key == "projects":
+            self.projects_page.delete_button.click()
             return
         if self.current_page_key == "history":
             self.history_page.delete_button.click()
@@ -779,7 +796,7 @@ class MainWindow(QMainWindow):
             return
 
         def task():
-            return {
+            bundle = {
                 "subscription": client.get_user_subscription(),
                 "user": client.get_user(),
                 "models": client.get_models(),
@@ -787,6 +804,15 @@ class MainWindow(QMainWindow):
                 "shared": client.get_shared_voices(page=1, page_size=18, category="professional"),
                 "history": client.get_history(page_size=20).get("history", []),
             }
+            try:
+                bundle["dubs"] = client.list_dubs(page_size=50)
+            except ApiError as error:
+                bundle["dubs"] = {"dubs": [], "error": str(error)}
+            try:
+                bundle["projects"] = client.list_studio_projects()
+            except ApiError as error:
+                bundle["projects"] = {"projects": [], "error": str(error)}
+            return bundle
 
         self._start_task("Refreshing workspace...", task, self._on_workspace_loaded)
 
@@ -804,14 +830,22 @@ class MainWindow(QMainWindow):
         )
         self.voice_page.set_voices(voices)
         self.voice_page.set_shared_voices(bundle.get("shared") or {})
-        self.clone_page.set_subscription(subscription)
-        self.clone_page.set_cloned_voices(voices)
+        dubs_payload = bundle.get("dubs") or {}
+        projects_payload = bundle.get("projects") or {}
+        self.dubbing_page.set_dubs(dubs_payload)
+        self.projects_page.set_projects(projects_payload.get("projects", []))
+        self.projects_page.set_voice_options(voices)
+        self.projects_page.set_model_options(models)
         self.studio_page.set_voice_options(voices)
         self.studio_page.set_model_options(models)
         self.history_page.set_history(history)
         if voices and self.voice_page.voice_table.currentRow() < 0:
             self.voice_page.voice_table.selectRow(0)
         message = f"Loaded {len(voices)} voices, {len(models)} models, {len(history)} history items."
+        if dubs_payload.get("error"):
+            self.dubbing_page.show_status(f"Dubbing list unavailable: {dubs_payload.get('error')}")
+        if projects_payload.get("error"):
+            self.projects_page.show_status(f"Projects unavailable: {projects_payload.get('error')}")
         self._apply_api_state(message)
         self._announce_ui(message)
 
@@ -859,6 +893,311 @@ class MainWindow(QMainWindow):
         self.voice_page.show_library_feedback(message)
         self._apply_api_state(message)
         self._announce_ui(message)
+
+    def refresh_dubs(self, filters: dict | None = None) -> None:
+        client = self._require_client()
+        if not client:
+            return
+        filters = filters or {}
+
+        def task():
+            return client.list_dubs(
+                page_size=100,
+                dubbing_status=str(filters.get("dubbing_status", "") or ""),
+            )
+
+        self._start_task("Refreshing dubbing jobs...", task, self._on_dubs_loaded)
+
+    def _on_dubs_loaded(self, payload: dict) -> None:
+        self.state["dubs"] = payload
+        self.dubbing_page.set_dubs(payload)
+        message = f"Dubbing jobs loaded: {len(payload.get('dubs', []))}."
+        self.dubbing_page.show_status(message)
+        self._apply_api_state(message)
+        self._announce_ui(message)
+
+    def load_dub_detail(self, dubbing_id: str) -> None:
+        client = self._require_client()
+        if not client or not dubbing_id:
+            return
+
+        def task():
+            return client.get_dubbing(dubbing_id)
+
+        def on_success(detail: dict) -> None:
+            targets = detail.get("target_languages", []) or []
+            message = (
+                f"Loaded dub: {detail.get('name', 'Unnamed')} | "
+                f"status: {detail.get('status', 'unknown')} | "
+                f"targets: {', '.join(targets) if targets else 'n/a'}."
+            )
+            self.dubbing_page.show_status(message)
+            self._apply_api_state(message)
+
+        self._start_task("Loading dub details...", task, on_success)
+
+    def create_dub(self, payload: dict) -> None:
+        client = self._require_client()
+        if not client:
+            return
+        target_lang = str(payload.get("target_lang", "") or "").strip()
+        source_url = str(payload.get("source_url", "") or "").strip()
+        file_path = str(payload.get("file_path", "") or "").strip()
+        if not target_lang:
+            QMessageBox.warning(self, "Missing language", "Target language is required.")
+            return
+        if not source_url and not file_path:
+            QMessageBox.warning(self, "Missing source", "Provide either a source URL or upload a source file.")
+            return
+        if source_url and file_path:
+            source_url = ""
+
+        def task():
+            client.create_dubbing(
+                target_lang=target_lang,
+                source_lang=str(payload.get("source_lang", "auto") or "auto"),
+                name=str(payload.get("name", "") or ""),
+                source_url=source_url,
+                file_path=Path(file_path) if file_path else None,
+                num_speakers=int(payload.get("num_speakers", 0) or 0),
+                watermark=bool(payload.get("watermark", False)),
+                highest_resolution=bool(payload.get("highest_resolution", False)),
+                drop_background_audio=bool(payload.get("drop_background_audio", False)),
+                use_profanity_filter=bool(payload.get("use_profanity_filter", False)),
+            )
+            return client.list_dubs(page_size=100)
+
+        def on_success(result: dict) -> None:
+            self._on_dubs_loaded(result)
+            message = "Dubbing job created."
+            self.dubbing_page.show_status(message)
+            self._apply_api_state(message)
+            self._announce_ui(message)
+
+        self._start_task("Creating dub...", task, on_success)
+
+    def download_dub(self, payload: dict) -> None:
+        client = self._require_client()
+        if not client:
+            return
+        dubbing_id = str(payload.get("dubbing_id", "") or "").strip()
+        language_code = str(payload.get("language_code", "") or "").strip()
+        if not dubbing_id or not language_code:
+            QMessageBox.warning(self, "Missing dub selection", "Select a dub and provide a language code.")
+            return
+
+        def task():
+            return client.get_dubbed_audio(dubbing_id, language_code)
+
+        def on_success(binary: BinaryPayload) -> None:
+            default_suffix = content_type_to_suffix(binary.content_type)
+            default_name = f"dub-{dubbing_id}-{language_code}{default_suffix}"
+            file_name, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save dubbed media",
+                str(self.config.outputs_dir / default_name),
+                "Media files (*.*)",
+            )
+            if not file_name:
+                return
+            Path(file_name).write_bytes(binary.content)
+            message = f"Dubbed media saved to {Path(file_name).name}."
+            self.dubbing_page.show_status(message)
+            self._apply_api_state(message)
+            self._announce_ui(message)
+
+        self._start_task("Downloading dubbed media...", task, on_success)
+
+    def delete_dub(self, selection: object) -> None:
+        client = self._require_client()
+        ids = self._normalize_ids(selection)
+        if not client or not ids:
+            return
+        count = len(ids)
+        confirmed = QMessageBox.question(
+            self,
+            "Delete dubbing job" if count == 1 else "Delete dubbing jobs",
+            "Delete selected dubbing job?"
+            if count == 1
+            else f"Delete {count} selected dubbing jobs?",
+        )
+        if confirmed != QMessageBox.Yes:
+            return
+
+        def task():
+            for dubbing_id in ids:
+                client.delete_dubbing(dubbing_id)
+            return client.list_dubs(page_size=100)
+
+        def on_success(result: dict) -> None:
+            self._on_dubs_loaded(result)
+            message = "Dubbing job deleted." if count == 1 else f"Deleted {count} dubbing jobs."
+            self.dubbing_page.show_status(message)
+            self._apply_api_state(message)
+            self._announce_ui(message)
+
+        self._start_task("Deleting dubbing jobs...", task, on_success)
+
+    def refresh_projects(self) -> None:
+        client = self._require_client()
+        if not client:
+            return
+
+        def task():
+            return client.list_studio_projects()
+
+        self._start_task("Refreshing projects...", task, self._on_projects_loaded)
+
+    def _on_projects_loaded(self, payload: dict) -> None:
+        self.state["projects"] = payload
+        projects = payload.get("projects", []) if isinstance(payload, dict) else []
+        self.projects_page.set_projects(projects)
+        message = f"Projects loaded: {len(projects)}."
+        self.projects_page.show_status(message)
+        self._apply_api_state(message)
+        self._announce_ui(message)
+
+    def load_project_detail(self, project_id: str) -> None:
+        client = self._require_client()
+        if not client or not project_id:
+            return
+
+        def task():
+            return {
+                "project": client.get_studio_project(project_id),
+                "snapshots": client.list_studio_project_snapshots(project_id).get("snapshots", []),
+            }
+
+        def on_success(result: dict) -> None:
+            details = self.state.setdefault("project_details", {})
+            if isinstance(details, dict):
+                details[project_id] = result
+            self.projects_page.set_project_detail(result.get("project", {}), result.get("snapshots", []))
+            message = f"Project loaded: {result.get('project', {}).get('name', 'Unnamed')}."
+            self.projects_page.show_status(message)
+            self._apply_api_state(message)
+
+        self._start_task("Loading project detail...", task, on_success)
+
+    def create_project(self, payload: dict) -> None:
+        client = self._require_client()
+        if not client:
+            return
+        name = str(payload.get("name", "") or "").strip()
+        if not name:
+            QMessageBox.warning(self, "Missing name", "Project name is required.")
+            return
+        source_url = str(payload.get("from_url", "") or "").strip()
+        document_path = str(payload.get("from_document_path", "")).strip()
+        if source_url and document_path:
+            source_url = ""
+
+        def task():
+            client.create_studio_project(
+                name=name,
+                default_model_id=str(payload.get("default_model_id", "") or ""),
+                default_title_voice_id=str(payload.get("default_title_voice_id", "") or ""),
+                default_paragraph_voice_id=str(payload.get("default_paragraph_voice_id", "") or ""),
+                from_url=source_url,
+                from_document_path=Path(document_path) if document_path else None,
+                quality_preset=str(payload.get("quality_preset", "") or ""),
+                auto_convert=bool(payload.get("auto_convert", False)),
+            )
+            return client.list_studio_projects()
+
+        def on_success(result: dict) -> None:
+            self._on_projects_loaded(result)
+            message = "Project created."
+            self.projects_page.show_status(message)
+            self._apply_api_state(message)
+            self._announce_ui(message)
+
+        self._start_task("Creating project...", task, on_success)
+
+    def convert_project(self, project_id: str) -> None:
+        client = self._require_client()
+        if not client or not project_id:
+            return
+
+        def task():
+            client.convert_studio_project(project_id)
+            return {
+                "project": client.get_studio_project(project_id),
+                "snapshots": client.list_studio_project_snapshots(project_id).get("snapshots", []),
+            }
+
+        def on_success(result: dict) -> None:
+            self.projects_page.set_project_detail(result.get("project", {}), result.get("snapshots", []))
+            message = "Project conversion started."
+            self.projects_page.show_status(message)
+            self._apply_api_state(message)
+            self._announce_ui(message)
+
+        self._start_task("Converting project...", task, on_success)
+
+    def download_project_archive(self, project_id: str) -> None:
+        client = self._require_client()
+        if not client or not project_id:
+            return
+
+        def task():
+            snapshots = client.list_studio_project_snapshots(project_id).get("snapshots", [])
+            if not snapshots:
+                raise RuntimeError("No snapshots found. Convert the project first.")
+            latest = max(snapshots, key=lambda item: int(item.get("created_at_unix", 0) or 0))
+            archive = client.stream_studio_project_archive(project_id, latest.get("project_snapshot_id", ""))
+            return {"archive": archive, "snapshot_id": latest.get("project_snapshot_id", "")}
+
+        def on_success(result: dict) -> None:
+            archive = result.get("archive")
+            if not isinstance(archive, BinaryPayload):
+                return
+            default_name = f"project-{project_id}-{result.get('snapshot_id', 'snapshot')}.zip"
+            file_name, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save project archive",
+                str(self.config.outputs_dir / default_name),
+                "Zip archive (*.zip);;All files (*.*)",
+            )
+            if not file_name:
+                return
+            Path(file_name).write_bytes(archive.content)
+            message = f"Project archive saved to {Path(file_name).name}."
+            self.projects_page.show_status(message)
+            self._apply_api_state(message)
+            self._announce_ui(message)
+
+        self._start_task("Downloading project archive...", task, on_success)
+
+    def delete_project(self, selection: object) -> None:
+        client = self._require_client()
+        ids = self._normalize_ids(selection)
+        if not client or not ids:
+            return
+        count = len(ids)
+        confirmed = QMessageBox.question(
+            self,
+            "Delete project" if count == 1 else "Delete projects",
+            "Delete selected Studio project?"
+            if count == 1
+            else f"Delete {count} selected Studio projects?",
+        )
+        if confirmed != QMessageBox.Yes:
+            return
+
+        def task():
+            for project_id in ids:
+                client.delete_studio_project(project_id)
+            return client.list_studio_projects()
+
+        def on_success(result: dict) -> None:
+            self._on_projects_loaded(result)
+            message = "Project deleted." if count == 1 else f"Deleted {count} projects."
+            self.projects_page.show_status(message)
+            self._apply_api_state(message)
+            self._announce_ui(message)
+
+        self._start_task("Deleting projects...", task, on_success)
 
     def load_voice_details(self, voice_id: str) -> None:
         client = self._require_client()
@@ -993,7 +1332,8 @@ class MainWindow(QMainWindow):
             )
         message = " ".join(parts) or "No voices were deleted."
         self.voice_page.show_voice_feedback(message)
-        self.clone_page.show_status(message)
+        self.dubbing_page.show_status(message)
+        self.projects_page.show_status(message)
         self._apply_api_state(message)
         self._announce_ui(message)
         if failed_count:
@@ -1103,7 +1443,7 @@ class MainWindow(QMainWindow):
             client.add_pvc_samples(
                 voice["voice_id"],
                 sample_paths=sample_paths,
-                remove_background_noise=bool(payload.get("remove_background_noise", True)),
+                remove_background_noise=bool(payload.get("remove_background_noise", False)),
             )
             checkpoint(
                 85,
@@ -1117,7 +1457,7 @@ class MainWindow(QMainWindow):
                 sample_paths=sample_paths,
                 description=payload.get("description", ""),
                 labels=parse_labels(payload.get("labels_text", "")),
-                remove_background_noise=bool(payload.get("remove_background_noise", True)),
+                remove_background_noise=bool(payload.get("remove_background_noise", False)),
             )
             checkpoint(85, "Instant clone created.", "The voice is ready and will appear in your cloned voices list.")
 
@@ -1271,6 +1611,8 @@ class MainWindow(QMainWindow):
         text = str(request.get("text") or "")
         text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
         request["text"] = text
+        request["srt_path"] = str(request.get("srt_path") or "").strip()
+        request["voice_settings"] = self._normalize_voice_settings(request.get("voice_settings"))
 
         language_code = str(request.get("language_code") or "").strip().lower()
         if language_code in {"", "auto"}:
@@ -1280,6 +1622,103 @@ class MainWindow(QMainWindow):
         model_id = str(request.get("model_id") or "")
         supported = self._get_model_language_codes(model_id)
         return request, bool(supported and language_code not in supported)
+
+    def _normalize_voice_settings(self, settings: object) -> dict[str, object]:
+        source = settings if isinstance(settings, dict) else {}
+        normalized: dict[str, object] = {}
+        extra_voice_settings = source.get("extra_voice_settings_json")
+        if isinstance(extra_voice_settings, str) and extra_voice_settings.strip():
+            try:
+                extra_payload = json.loads(extra_voice_settings)
+            except ValueError:
+                extra_payload = None
+            if isinstance(extra_payload, dict):
+                for key, value in extra_payload.items():
+                    if isinstance(key, str) and key.strip():
+                        normalized[key.strip()] = value
+        for key in ("stability", "similarity_boost", "style", "speed", "loudness", "speaker_loudness"):
+            value = source.get(key)
+            if value is None:
+                continue
+            try:
+                normalized[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+        boost_value = source.get("use_speaker_boost", source.get("speaker_boost", True))
+        normalized["use_speaker_boost"] = bool(boost_value)
+        return normalized
+
+    def _eleven_v3_mu(self, model_id: str) -> bool:
+        return str(model_id or "").strip().lower() == "eleven_v3"
+
+    def _tts_maksimum_karakter_sayisi(self, model_id: str) -> int:
+        if self._eleven_v3_mu(model_id):
+            return 4500
+        return 2000
+
+    def _ses_etiketi_var_mi(self, metin: str) -> bool:
+        return bool(re.search(r"\[[^\[\]]+\]", metin))
+
+    def _v3_betik_hizi_etiketi(self, hiz: float | None) -> str:
+        if hiz is None:
+            return ""
+        if hiz <= 0.92:
+            return "slowly"
+        return ""
+
+    def _v3_duygu_etiketleri(self, metin: str) -> list[str]:
+        kucuk_metin = metin.casefold()
+        etiketler: list[str] = []
+        eslesmeler = (
+            ("whispers", (r"\bfisil", r"\bfisild", r"\bwhisper", r"\bfisilt")),
+            ("shouts", (r"\bbagir", r"\bhaykir", r"\bshout", r"\byell", r"\bciglik")),
+            ("laughs", (r"\bgul", r"\blaugh", r"\bkikird", r"\bkahkaha")),
+            ("sighs", (r"\bic cek", r"\bsigh", r"\bof\b", r"\bah\b")),
+            ("exhales", (r"\bnefes verir", r"\bexhale", r"\bderin nefes")),
+            ("crying", (r"\bagla", r"\bcry", r"\bhickir")),
+            ("angry", (r"\bofke", r"\bkizgin", r"\bangry", r"\bfurious")),
+            ("excited", (r"\bheyecan", r"\bexcited", r"\bcosku", r"\benthusias")),
+            ("curious", (r"\bmerak", r"\bcurious")),
+            ("sarcastic", (r"\balay", r"\biğne", r"\bsarcast")),
+            ("applause", (r"\balkis", r"\bapplause", r"\bclapping")),
+            ("explosion", (r"\bpatlama", r"\bexplosion", r"\bbomba")),
+            ("gulps", (r"\byutkun", r"\bgulp", r"\bswallow")),
+            ("coughs", (r"\boksur", r"\bcough")),
+            ("sad", (r"\buzgun", r"\bkeder", r"\bsad")),
+            ("happily", (r"\bmutlu", r"\bneşe", r"\bnese", r"\bhappy")),
+        )
+        for etiket, desenler in eslesmeler:
+            if any(re.search(desen, kucuk_metin) for desen in desenler):
+                etiketler.append(etiket)
+        return etiketler
+
+    def _v3_metinini_hazirla(self, metin: str, voice_settings: dict[str, object]) -> str:
+        hazir_metin = re.sub(r"\s+", " ", metin.strip())
+        if not hazir_metin:
+            return hazir_metin
+        if hazir_metin.startswith("[") and hazir_metin.endswith("]") and not self._ses_etiketi_var_mi(hazir_metin[1:-1]):
+            hazir_metin = hazir_metin[1:-1].strip()
+        etiketler: list[str] = []
+        hiz_etiketi = self._v3_betik_hizi_etiketi(self._sayiya_cevir(voice_settings.get("speed")))
+        if hiz_etiketi and f"[{hiz_etiketi}]" not in hazir_metin.casefold():
+            etiketler.append(hiz_etiketi)
+        if not self._ses_etiketi_var_mi(hazir_metin):
+            for etiket in self._v3_duygu_etiketleri(hazir_metin):
+                if f"[{etiket}]" not in hazir_metin.casefold():
+                    etiketler.append(etiket)
+        if hazir_metin[-1] not in ".!?":
+            hazir_metin = f"{hazir_metin}."
+        if hiz_etiketi == "slowly" and "..." not in hazir_metin and "," in hazir_metin:
+            hazir_metin = hazir_metin.replace(", ", "... ")
+        if not etiketler:
+            return hazir_metin
+        return f"{' '.join(f'[{etiket}]' for etiket in etiketler)} {hazir_metin}".strip()
+
+    def _sayiya_cevir(self, deger: object) -> float | None:
+        try:
+            return float(deger)
+        except (TypeError, ValueError):
+            return None
 
     def _split_tts_text(self, text: str, *, max_chars: int = 2000) -> list[str]:
         normalized = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -1336,6 +1775,135 @@ class MainWindow(QMainWindow):
                 current_size += size + 2
         push_buffer(buffer)
         return chunks or [normalized]
+
+    def _parse_srt_timestamp_ms(self, value: str) -> int:
+        match = re.fullmatch(r"(?:(\d+):)?(\d{2}):(\d{2})[,.](\d{1,3})", value.strip())
+        if not match:
+            raise ValueError(f"Invalid SRT timestamp: {value}")
+        hours = int(match.group(1) or 0)
+        minutes = int(match.group(2) or 0)
+        seconds = int(match.group(3) or 0)
+        milliseconds = int((match.group(4) or "0").ljust(3, "0")[:3])
+        return (((hours * 60) + minutes) * 60 + seconds) * 1000 + milliseconds
+
+    def _parse_srt_cues(self, path: Path) -> list[dict[str, object]]:
+        try:
+            raw = path.read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            raw = path.read_text(encoding="cp1254", errors="replace")
+        normalized = raw.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not normalized:
+            raise ValueError("The selected SRT file is empty.")
+
+        cues: list[dict[str, object]] = []
+        blocks = [block.strip() for block in re.split(r"\n\s*\n", normalized) if block.strip()]
+        for block_index, block in enumerate(blocks, start=1):
+            lines = [line.strip() for line in block.split("\n") if line.strip()]
+            if len(lines) < 2:
+                continue
+            cursor = 0
+            if re.fullmatch(r"\d+", lines[0]):
+                cursor = 1
+            if cursor >= len(lines):
+                continue
+            timeline = lines[cursor]
+            match = re.match(r"(.+?)\s*-->\s*(.+?)(?:\s+.*)?$", timeline)
+            if not match:
+                continue
+            start_ms = self._parse_srt_timestamp_ms(match.group(1))
+            end_ms = self._parse_srt_timestamp_ms(match.group(2))
+            if end_ms < start_ms:
+                end_ms = start_ms
+            text = " ".join(lines[cursor + 1 :])
+            text = re.sub(r"<[^>]+>", " ", text)
+            text = re.sub(r"\{[^}]+\}", " ", text)
+            text = re.sub(r"\s+", " ", text).strip()
+            if not text:
+                continue
+            cues.append(
+                {
+                    "index": block_index,
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "text": text,
+                }
+            )
+        if not cues:
+            raise ValueError("No readable subtitle cues were found in the selected SRT file.")
+        return cues
+
+    def _build_tts_api_request(
+        self,
+        payload: dict,
+        *,
+        text: str | None = None,
+        output_format: str | None = None,
+        timed_mode: bool = False,
+    ) -> dict:
+        request = {
+            "voice_id": payload.get("voice_id"),
+            "text": text if text is not None else payload.get("text", ""),
+            "model_id": payload.get("model_id"),
+            "output_format": output_format if output_format is not None else payload.get("output_format", ""),
+            "language_code": payload.get("language_code", ""),
+            "seed": payload.get("seed"),
+            "enable_logging": bool(payload.get("enable_logging", True)),
+            "voice_settings": copy.deepcopy(payload.get("voice_settings") or {}),
+            "_timed_mode": timed_mode,
+        }
+        if not request["language_code"]:
+            request["language_code"] = ""
+        if request["seed"] in {"", 0}:
+            request["seed"] = None
+        return request
+
+    def _tts_baglam_metni(self, chunks: list[str], index: int, *, onceki: bool) -> str:
+        komsu_index = index - 1 if onceki else index + 1
+        if komsu_index < 0 or komsu_index >= len(chunks):
+            return ""
+        metin = chunks[komsu_index].strip()
+        sinir = 900
+        if len(metin) <= sinir:
+            return metin
+        return metin[-sinir:] if onceki else metin[:sinir]
+
+    def _tts_baglami_ekle(self, request: dict, chunks: list[str], index: int, onceki_istek_kimlikleri: list[str]) -> None:
+        if self._eleven_v3_mu(str(request.get("model_id") or "")):
+            return
+        onceki_metin = self._tts_baglam_metni(chunks, index, onceki=True)
+        sonraki_metin = self._tts_baglam_metni(chunks, index, onceki=False)
+        if onceki_metin:
+            request["previous_text"] = onceki_metin
+        if sonraki_metin:
+            request["next_text"] = sonraki_metin
+        if onceki_istek_kimlikleri:
+            request["previous_request_ids"] = onceki_istek_kimlikleri[-3:]
+
+    def _request_tts_audio(self, client: ElevenLabsClient, request: dict, locked_voice_settings: dict[str, object]) -> AudioPayload:
+        payload = dict(request)
+        timed_mode = bool(payload.pop("_timed_mode", False))
+        voice_settings = copy.deepcopy(locked_voice_settings)
+        if self._eleven_v3_mu(str(payload.get("model_id") or "")):
+            voice_settings.pop("use_speaker_boost", None)
+            payload.pop("previous_text", None)
+            payload.pop("next_text", None)
+            payload.pop("previous_request_ids", None)
+            payload.pop("next_request_ids", None)
+            payload["text"] = self._v3_metinini_hazirla(str(payload.get("text") or ""), voice_settings)
+            if timed_mode and len(payload["text"]) < 250:
+                payload["text"] = f"{payload['text']} ..."
+        payload["voice_settings"] = voice_settings
+        try:
+            return client.text_to_speech(**payload)
+        except ApiError as error:
+            details = str(error.details).casefold()
+            message = str(error).casefold()
+            if payload.get("language_code") and ("language" in details or "language" in message):
+                retry = dict(payload)
+                retry["language_code"] = ""
+                retry["voice_settings"] = copy.deepcopy(locked_voice_settings)
+                return client.text_to_speech(**retry)
+            raise
 
     def _start_tts_progress(self, chunks: list[str]) -> None:
         total_chars = sum(len(chunk) for chunk in chunks)
@@ -1485,95 +2053,198 @@ class MainWindow(QMainWindow):
             history_item_id=payloads[-1].history_item_id,
         )
 
+    def _merge_timed_wav_payloads(self, timed_payloads: list[tuple[dict[str, object], AudioPayload]]) -> tuple[AudioPayload, dict[str, int]]:
+        if not timed_payloads:
+            raise ValueError("No subtitle audio was produced.")
+        params = None
+        frame_rate = 0
+        frame_size = 0
+        total_frames = 0
+        total_characters = 0
+        overlap_count = 0
+        combined = bytearray()
+        for cue, payload in timed_payloads:
+            with wave.open(io.BytesIO(payload.audio), "rb") as wav_file:
+                current = (
+                    wav_file.getnchannels(),
+                    wav_file.getsampwidth(),
+                    wav_file.getframerate(),
+                    wav_file.getcomptype(),
+                    wav_file.getcompname(),
+                )
+                if params is None:
+                    params = current
+                    frame_rate = wav_file.getframerate()
+                    frame_size = wav_file.getnchannels() * wav_file.getsampwidth()
+                elif current != params:
+                    raise ValueError("Timed subtitle chunks could not be merged because their WAV parameters do not match.")
+                cue_frame_count = wav_file.getnframes()
+                cue_audio = wav_file.readframes(cue_frame_count)
+            try:
+                total_characters += int(payload.character_count or 0)
+            except ValueError:
+                pass
+            target_frame = int(round((int(cue.get("start_ms", 0) or 0) / 1000) * frame_rate))
+            if target_frame > total_frames:
+                silence_frames = target_frame - total_frames
+                combined.extend(b"\x00" * silence_frames * frame_size)
+                total_frames = target_frame
+            elif target_frame < total_frames:
+                overlap_count += 1
+            combined.extend(cue_audio)
+            total_frames += cue_frame_count
+        out = io.BytesIO()
+        with wave.open(out, "wb") as wav_out:
+            assert params is not None
+            wav_out.setnchannels(params[0])
+            wav_out.setsampwidth(params[1])
+            wav_out.setframerate(params[2])
+            wav_out.setcomptype(params[3], params[4])
+            wav_out.writeframes(bytes(combined))
+        return (
+            AudioPayload(
+                audio=out.getvalue(),
+                content_type="audio/wav",
+                request_id=timed_payloads[-1][1].request_id,
+                character_count=str(total_characters) if total_characters else "",
+                history_item_id=timed_payloads[-1][1].history_item_id,
+            ),
+            {
+                "cue_count": len(timed_payloads),
+                "overlap_count": overlap_count,
+                "duration_ms": int(round((total_frames / frame_rate) * 1000)) if frame_rate else 0,
+            },
+        )
+
     def _merge_audio_payloads(self, payloads: list[AudioPayload]) -> AudioPayload:
         if len(payloads) == 1:
             return payloads[0]
         content_type = payloads[0].content_type
         if "wav" in content_type:
             return self._merge_wav_payloads(payloads)
-        combined = b"".join(piece.audio for piece in payloads)
-        total_characters = 0
-        for piece in payloads:
-            try:
-                total_characters += int(piece.character_count or 0)
-            except ValueError:
-                continue
-        return AudioPayload(
-            audio=combined,
-            content_type=content_type,
-            request_id=payloads[-1].request_id,
-            character_count=str(total_characters) if total_characters else "",
-            history_item_id=payloads[-1].history_item_id,
-        )
+        raise ValueError("Multi-part speech output must be generated as WAV before merging.")
 
     def generate_tts(self, payload: dict) -> None:
         client = self._require_client()
         if not client:
             return
-        if not payload.get("voice_id") or not payload.get("model_id") or not payload.get("text"):
-            QMessageBox.warning(self, "Missing TTS data", "Voice, model and text are required.")
+        if not payload.get("voice_id") or not payload.get("model_id"):
+            QMessageBox.warning(self, "Missing TTS data", "Voice and model are required.")
             return
         normalized_payload, language_ignored = self._normalize_tts_payload(payload)
-        if not normalized_payload.get("text"):
-            QMessageBox.warning(self, "Missing TTS data", "Voice, model and text are required.")
-            return
-        chunks = self._split_tts_text(str(normalized_payload.get("text", "")), max_chars=2000)
+        locked_voice_settings = self._normalize_voice_settings(normalized_payload.get("voice_settings"))
+        normalized_payload["voice_settings"] = copy.deepcopy(locked_voice_settings)
+        maksimum_karakter_sayisi = self._tts_maksimum_karakter_sayisi(str(normalized_payload.get("model_id") or ""))
+        srt_path_value = str(normalized_payload.get("srt_path") or "").strip()
+        timed_jobs: list[dict[str, object]] = []
+        timed_mode = bool(srt_path_value)
+        chunks: list[str] = []
+        if timed_mode:
+            try:
+                cues = self._parse_srt_cues(Path(srt_path_value))
+            except (OSError, ValueError) as error:
+                QMessageBox.warning(self, "Invalid SRT file", str(error))
+                return
+            for cue in cues:
+                cue_text = str(cue.get("text") or "").strip()
+                cue_chunks = self._split_tts_text(cue_text, max_chars=maksimum_karakter_sayisi)
+                if not cue_chunks:
+                    continue
+                timed_jobs.append({"cue": cue, "chunks": cue_chunks})
+                chunks.extend(cue_chunks)
+            if not timed_jobs:
+                QMessageBox.warning(self, "Invalid SRT file", "The selected SRT file does not contain any speakable subtitle cues.")
+                return
+        else:
+            if not normalized_payload.get("text"):
+                QMessageBox.warning(self, "Missing TTS data", "Voice, model and text are required.")
+                return
+            chunks = self._split_tts_text(str(normalized_payload.get("text", "")), max_chars=maksimum_karakter_sayisi)
         if not chunks:
-            QMessageBox.warning(self, "Missing TTS data", "Text is empty after normalization.")
+            QMessageBox.warning(self, "Missing TTS data", "There is no text to synthesize after normalization.")
             return
         self.last_generation_request = {"kind": "tts", "payload": normalized_payload.copy()}
         self.studio_page.clear_result()
-        self.studio_page.show_status("Generating speech...")
+        self.studio_page.show_status("Generating timed subtitle narration..." if timed_mode else "Generating speech...")
         self._start_tts_progress(chunks)
+        if self._eleven_v3_mu(str(normalized_payload.get("model_id") or "")):
+            v3_mesaji = "Eleven v3 automatic prompt shaping is active. Speaker boost is disabled and pacing tags may be injected from the text."
+            self._apply_api_state(v3_mesaji)
+            self._announce_ui(v3_mesaji)
         if language_ignored:
             self._apply_api_state("Selected language is not supported by this model. Using Auto language.")
             self._announce_ui("Language code was ignored for the selected model.")
 
         def task():
             try:
+                if timed_jobs:
+                    requested_format = str(normalized_payload.get("output_format") or "")
+                    actual_output_format = "wav_44100"
+                    timed_payloads: list[tuple[dict[str, object], AudioPayload]] = []
+                    total_generated_chunks = 0
+                    onceki_istek_kimlikleri: list[str] = []
+                    for job in timed_jobs:
+                        cue = job["cue"]
+                        cue_chunks = list(job["chunks"])
+                        cue_parts: list[AudioPayload] = []
+                        for chunk in cue_chunks:
+                            request = self._build_tts_api_request(
+                                normalized_payload,
+                                text=chunk,
+                                output_format=actual_output_format,
+                                timed_mode=True,
+                            )
+                            self._tts_baglami_ekle(request, chunks, total_generated_chunks, onceki_istek_kimlikleri)
+                            self._mark_tts_chunk_started(chunk)
+                            audio_parcasi = self._request_tts_audio(client, request, locked_voice_settings)
+                            cue_parts.append(audio_parcasi)
+                            if audio_parcasi.request_id:
+                                onceki_istek_kimlikleri.append(audio_parcasi.request_id)
+                                onceki_istek_kimlikleri = onceki_istek_kimlikleri[-3:]
+                            self._advance_tts_progress(chunk)
+                            total_generated_chunks += 1
+                        cue_audio = self._merge_audio_payloads(cue_parts)
+                        timed_payloads.append((cue, cue_audio))
+                    audio, timing_meta = self._merge_timed_wav_payloads(timed_payloads)
+                    return {
+                        "audio": audio,
+                        "timed_mode": True,
+                        "chunk_count": total_generated_chunks,
+                        "cue_count": len(timed_payloads),
+                        "overlap_count": int(timing_meta.get("overlap_count", 0) or 0),
+                        "duration_ms": int(timing_meta.get("duration_ms", 0) or 0),
+                        "format_overridden": requested_format != actual_output_format,
+                        "requested_output_format": requested_format,
+                        "actual_output_format": actual_output_format,
+                    }
                 if len(chunks) == 1:
                     self._mark_tts_chunk_started(chunks[0])
-                    try:
-                        audio = client.text_to_speech(**normalized_payload)
-                    except ApiError as error:
-                        # If language is not supported by the selected model, retry once in auto mode.
-                        details = str(error.details).casefold()
-                        message = str(error).casefold()
-                        if normalized_payload.get("language_code") and (
-                            "language" in details or "language" in message
-                        ):
-                            retry = dict(normalized_payload)
-                            retry["language_code"] = ""
-                            audio = client.text_to_speech(**retry)
-                        else:
-                            raise
+                    request = self._build_tts_api_request(normalized_payload, timed_mode=False)
+                    audio = self._request_tts_audio(client, request, locked_voice_settings)
                     self._advance_tts_progress(chunks[0])
                     return {"audio": audio, "chunk_count": 1}
                 parts: list[AudioPayload] = []
                 requested_format = str(normalized_payload.get("output_format") or "")
                 chunk_output_format = requested_format
                 format_overridden = False
-                # Compressed stream concatenation is unreliable across players.
-                # For multi-chunk generation, synthesize as WAV and merge frames losslessly.
                 if not chunk_output_format.startswith("wav_"):
                     chunk_output_format = "wav_44100"
                     format_overridden = True
-                for chunk in chunks:
-                    request = dict(normalized_payload)
-                    request["text"] = chunk
-                    request["output_format"] = chunk_output_format
+                onceki_istek_kimlikleri: list[str] = []
+                for index, chunk in enumerate(chunks):
+                    request = self._build_tts_api_request(
+                        normalized_payload,
+                        text=chunk,
+                        output_format=chunk_output_format,
+                        timed_mode=False,
+                    )
+                    self._tts_baglami_ekle(request, chunks, index, onceki_istek_kimlikleri)
                     self._mark_tts_chunk_started(chunk)
-                    try:
-                        parts.append(client.text_to_speech(**request))
-                    except ApiError as error:
-                        details = str(error.details).casefold()
-                        message = str(error).casefold()
-                        if request.get("language_code") and ("language" in details or "language" in message):
-                            retry = dict(request)
-                            retry["language_code"] = ""
-                            parts.append(client.text_to_speech(**retry))
-                        else:
-                            raise
+                    audio_parcasi = self._request_tts_audio(client, request, locked_voice_settings)
+                    parts.append(audio_parcasi)
+                    if audio_parcasi.request_id:
+                        onceki_istek_kimlikleri.append(audio_parcasi.request_id)
+                        onceki_istek_kimlikleri = onceki_istek_kimlikleri[-3:]
                     self._advance_tts_progress(chunk)
                 return {
                     "audio": self._merge_audio_payloads(parts),
@@ -1622,7 +2293,29 @@ class MainWindow(QMainWindow):
         if isinstance(audio, AudioPayload):
             self._on_audio_generated(prefix, audio)
             chunk_count = int(payload.get("chunk_count", 1) or 1)
-            if chunk_count > 1:
+            timed_mode = bool(payload.get("timed_mode"))
+            if timed_mode:
+                cue_count = int(payload.get("cue_count", 0) or 0)
+                overlap_count = int(payload.get("overlap_count", 0) or 0)
+                duration_ms = int(payload.get("duration_ms", 0) or 0)
+                seconds = duration_ms / 1000 if duration_ms else 0.0
+                message = f"Timed narration rendered from {cue_count} subtitle cues in {chunk_count} chunks. Final duration is {seconds:.1f} seconds."
+                if overlap_count:
+                    message += f" {overlap_count} cue starts landed inside already playing audio, so playback continued without cutting speech."
+                self.studio_page.show_status(message)
+                self._apply_api_state(message)
+                self._announce_ui(message)
+                if payload.get("format_overridden"):
+                    requested = str(payload.get("requested_output_format") or "unknown")
+                    actual = str(payload.get("actual_output_format") or "wav_44100")
+                    notice = (
+                        f"Timed subtitle narration used {actual} so silence and cue timing could be merged safely. "
+                        f"Requested format {requested} was overridden."
+                    )
+                    self._apply_api_state(notice)
+                    self.studio_page.show_status(notice)
+                    self._announce_ui(notice)
+            elif chunk_count > 1:
                 message = f"Long text processed in {chunk_count} chunks."
                 self.studio_page.show_status(message)
                 self._announce_ui(message)
